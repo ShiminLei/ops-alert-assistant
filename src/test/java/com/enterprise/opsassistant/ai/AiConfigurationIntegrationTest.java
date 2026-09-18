@@ -5,6 +5,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.retry.RetryRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -22,10 +23,10 @@ class AiConfigurationIntegrationTest {
     private OpsAssistantAiProperties properties;
 
     @Autowired
-    private AiClientRegistry registry;
+    private SpringAiClientRegistry registry;
 
     @Autowired
-    private AiModelRouter router;
+    private SpringAiModelRouter router;
 
     @Autowired
     private RetryRegistry retryRegistry;
@@ -42,14 +43,12 @@ class AiConfigurationIntegrationTest {
         assertThat(properties.getBackupProvider()).isEqualTo("mock-backup");
         assertThat(registry.size()).isEqualTo(2);
 
-        AiRoutingResult result = router.chatWithFallback(new AiChatRequest(
-                "analysis-config-test",
-                "ops-incident-review",
-                List.of(new AiMessage(AiRole.USER, "测试模型配置"))
-        ));
+        SpringAiRoutingResult<AiReviewStructuredOutput> result = router.callWithFallback(
+                List.of(new UserMessage("测试模型配置")),
+                AiReviewStructuredOutput.class);
 
-        assertThat(result.response().provider()).isEqualTo("mock-primary");
-        assertThat(result.response().model()).isEqualTo("mock-ops-primary");
+        assertThat(result.provider()).isEqualTo("mock-primary");
+        assertThat(result.model()).isEqualTo("mock-ops-primary");
         assertThat(result.fallbackUsed()).isFalse();
     }
 

@@ -6,6 +6,10 @@ spring:
   jackson:
     default-property-inclusion: non_null
   ai:
+    # 本项目需要同时创建主、备两个 ChatModel，因此关闭“单模型”自动装配，
+    # 改由 SpringAiChatConfiguration 按 providers 配置逐个创建。
+    model:
+      chat: none
     openai:
       #
       # Spring AI 的 OpenAI 模型实现同样可以连接 DeepSeek、百炼等

@@ -1,9 +1,7 @@
 package com.enterprise.opsassistant.ai;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -21,13 +19,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SpringAiChatConfigurationIntegrationTest {
 
     @Autowired
-    @Qualifier("opsReviewChatClient")
-    private ChatClient chatClient;
+    private SpringAiClientRegistry registry;
 
     /** Spring AI 应当把确定性模型返回的 JSON 自动转换成强类型复核对象。 */
     @Test
     void shouldConvertModelResponseToStructuredReview() {
-        AiReviewStructuredOutput review = chatClient.prompt()
+        SpringAiProviderClient primary = registry.find("mock-primary").orElseThrow();
+        AiReviewStructuredOutput review = primary.chatClient().prompt()
                 .user("请复核一条用于集成测试的运维告警。")
                 .call()
                 .entity(AiReviewStructuredOutput.class);

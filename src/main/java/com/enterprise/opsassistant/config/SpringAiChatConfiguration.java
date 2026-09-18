@@ -1,55 +1,190 @@
 package com.enterprise.opsassistant.config;
 
 import com.enterprise.opsassistant.ai.DeterministicOpsChatModel;
+import com.enterprise.opsassistant.ai.SpringAiClientRegistry;
+import com.enterprise.opsassistant.ai.SpringAiProviderClient;
+import io.micrometer.observation.ObservationRegistry;
+import io.netty.channel.ChannelOption;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.model.chat.client.autoconfigure.ChatClientBuilderConfigurer;
+import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
-import org.springframework.context.annotation.Profile;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.retry.support.RetryTemplate;
+import org.springframework.web.client.ResponseErrorHandler;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.netty.http.client.HttpClient;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
- * 企业运维助手的 Spring AI 原生组件配置。
+ * 企业运维助手的 Spring AI 原生模型配置。
  *
- * <p>配置类只负责组装模型与 ChatClient，不放业务分析逻辑。业务服务依赖命名后的
- * {@code opsReviewChatClient}，以后即使增加告警识别、报告生成等多个不同提示词的 ChatClient，
- * 也能清楚知道每个客户端的用途。</p>
+ * <p>这里根据 {@code ops-assistant.ai.providers} 为每个启用的 Provider 创建一个独立
+ * {@link ChatClient}。独立客户端非常重要：DeepSeek 和百炼可以拥有不同的地址、密钥、模型、
+ * 超时时间及观测数据，业务路由器也才能在主模型失败后明确切换到备用模型。</p>
+ *
+ * <p>配置层只负责“如何连接模型”，不决定“先调用谁、失败后调用谁”。主备顺序属于业务策略，
+ * 由 SpringAiModelRouter 处理，避免网络配置和业务规则混在同一个类里。</p>
  */
 @Configuration
 public class SpringAiChatConfiguration {
 
     /**
-     * local/test 环境优先使用确定性模型，避免在开发机启动或运行测试时意外请求真实模型。
+     * 为所有已启用 Provider 创建客户端并放入注册表。
      *
-     * <p>{@link Primary} 用来告诉 Spring：当容器里同时存在自动配置的 OpenAI 模型和本地模型时，
-     * ChatClient.Builder 应选择这个本地模型。prod 环境不会创建该 Bean，因此会自然切换到
-     * Spring AI 自动配置的 OpenAI 兼容模型。</p>
+     * <p>名称以 {@code mock} 开头的 Provider 使用确定性内存模型，方便本地开发和自动化测试；
+     * 其他 Provider 使用 Spring AI 的 {@link OpenAiChatModel}。DeepSeek 与百炼都提供 OpenAI
+     * 兼容接口，因此无需为每家供应商重新编写 HTTP、JSON 和 Structured Output 代码。</p>
      */
     @Bean
-    @Primary
-    @Profile({"local", "test"})
-    public ChatModel deterministicOpsChatModel() {
-        return new DeterministicOpsChatModel();
+    public SpringAiClientRegistry springAiClientRegistry(
+            OpsAssistantAiProperties properties,
+            @Qualifier("opsReviewSystemPrompt") Resource systemPrompt,
+            ChatClientBuilderConfigurer builderConfigurer,
+            ToolCallingManager toolCallingManager,
+            ObservationRegistry observationRegistry,
+            ResponseErrorHandler responseErrorHandler) {
+        List<SpringAiProviderClient> clients = new ArrayList<>();
+
+        for (Map.Entry<String, OpsAssistantAiProperties.Provider> entry
+                : properties.getProviders().entrySet()) {
+            String providerName = requireText(entry.getKey(), "provider name");
+            OpsAssistantAiProperties.Provider provider = entry.getValue();
+            if (provider == null || !provider.isEnabled()) {
+                continue;
+            }
+
+            String modelName = requireText(
+                    provider.getModel(), "model of provider " + providerName);
+            ChatModel model = isMockProvider(providerName)
+                    ? new DeterministicOpsChatModel()
+                    : createRemoteModel(providerName, provider, toolCallingManager,
+                            observationRegistry, responseErrorHandler);
+
+            // 每个 Provider 使用相同的安全系统提示词，但各自持有独立模型连接。
+            ChatClient chatClient = builderConfigurer.configure(ChatClient.builder(model))
+                    .defaultSystem(systemPrompt)
+                    .build();
+            clients.add(new SpringAiProviderClient(providerName, modelName, chatClient));
+        }
+
+        if (clients.isEmpty()) {
+            throw new IllegalStateException("At least one Spring AI provider must be enabled");
+        }
+        return new SpringAiClientRegistry(clients);
     }
 
     /**
-     * 创建事故复核专用 ChatClient，并从 classpath 读取系统提示词。
+     * 创建一个远程 OpenAI 兼容模型。
      *
-     * <p>系统提示词作为资源文件管理，比硬编码在 Java 字符串中更便于审核和迭代。这里使用
-     * Spring AI 自动配置的 Builder，因此模型观测、重试以及后续 Advisor 定制仍然有效。</p>
+     * <p>Spring AI 仍然负责请求协议、响应解析、工具调用、结构化输出和 Micrometer 观测。
+     * 本项目外层已经使用 Resilience4j 做 Provider 级重试，所以模型内部重试固定为一次，避免
+     * “内层重试 × 外层重试”导致实际请求次数成倍增加。</p>
      */
-    @Bean("opsReviewChatClient")
-    public ChatClient opsReviewChatClient(
-            ChatClient.Builder builder,
-            @Qualifier("opsReviewSystemPrompt") Resource systemPrompt) {
-        return builder.defaultSystem(systemPrompt).build();
+    private ChatModel createRemoteModel(String providerName,
+                                        OpsAssistantAiProperties.Provider provider,
+                                        ToolCallingManager toolCallingManager,
+                                        ObservationRegistry observationRegistry,
+                                        ResponseErrorHandler responseErrorHandler) {
+        String baseUrl = trimTrailingSlash(requireText(
+                provider.getBaseUrl(), "base-url of provider " + providerName));
+        String apiKey = requireText(
+                provider.getApiKey(), "api-key of provider " + providerName);
+        Duration timeout = requirePositiveTimeout(providerName, provider.getTimeout());
+
+        java.net.http.HttpClient jdkHttpClient = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(timeout)
+                .build();
+        JdkClientHttpRequestFactory requestFactory =
+                new JdkClientHttpRequestFactory(jdkHttpClient);
+        requestFactory.setReadTimeout(timeout);
+        RestClient.Builder restClientBuilder = RestClient.builder()
+                .requestFactory(requestFactory);
+
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, safeTimeoutMillis(timeout))
+                .responseTimeout(timeout);
+        WebClient.Builder webClientBuilder = WebClient.builder()
+                .clientConnector(new ReactorClientHttpConnector(httpClient));
+
+        OpenAiApi openAiApi = OpenAiApi.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .completionsPath("/chat/completions")
+                .restClientBuilder(restClientBuilder)
+                .webClientBuilder(webClientBuilder)
+                .responseErrorHandler(responseErrorHandler)
+                .build();
+
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .model(provider.getModel().trim())
+                .temperature(provider.getTemperature())
+                .maxTokens(provider.getMaxTokens())
+                .build();
+
+        RetryTemplate noNestedRetry = RetryTemplate.builder()
+                .maxAttempts(1)
+                .fixedBackoff(1)
+                .build();
+
+        return OpenAiChatModel.builder()
+                .openAiApi(openAiApi)
+                .defaultOptions(options)
+                .toolCallingManager(toolCallingManager)
+                .retryTemplate(noNestedRetry)
+                .observationRegistry(observationRegistry)
+                .build();
     }
 
-    /** 将提示词资源单独注册成 Bean，明确它属于事故复核场景。 */
+    /** 系统提示词单独作为资源 Bean，便于以后按 AI Service 场景拆分和版本管理。 */
     @Bean("opsReviewSystemPrompt")
     public Resource opsReviewSystemPrompt() {
-        return new org.springframework.core.io.ClassPathResource("prompts/ops-review-system.st");
+        return new ClassPathResource("prompts/ops-review-system.st");
+    }
+
+    private boolean isMockProvider(String providerName) {
+        return providerName.toLowerCase(Locale.ROOT).startsWith("mock");
+    }
+
+    private String requireText(String value, String fieldDescription) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(fieldDescription + " must not be blank");
+        }
+        return value.trim();
+    }
+
+    private Duration requirePositiveTimeout(String providerName, Duration timeout) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalStateException(
+                    "timeout of provider " + providerName + " must be positive");
+        }
+        return timeout;
+    }
+
+    private int safeTimeoutMillis(Duration timeout) {
+        return (int) Math.min(Integer.MAX_VALUE, timeout.toMillis());
+    }
+
+    private String trimTrailingSlash(String baseUrl) {
+        int end = baseUrl.length();
+        while (end > 0 && baseUrl.charAt(end - 1) == '/') {
+            end--;
+        }
+        return baseUrl.substring(0, end);
     }
 }
