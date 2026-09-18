@@ -21,7 +21,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -120,6 +122,7 @@ public class AlertAnalysisController {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
         AtomicBoolean clientConnected = new AtomicBoolean(true);
         AtomicReference<String> analysisId = new AtomicReference<>();
+        SseSequenceContext sequenceContext = new SseSequenceContext();
 
         // 三种结束回调都只更新连接状态；分析线程会自行结束或继续生成可审计报告。
         emitter.onCompletion(() -> clientConnected.set(false));
@@ -134,7 +137,8 @@ public class AlertAnalysisController {
         });
 
         analysisTaskExecutor.execute(() -> runStreamingAnalysis(
-                request.alertText(), request.conversationId(), emitter, clientConnected, analysisId));
+                request.alertText(), request.conversationId(), emitter,
+                clientConnected, analysisId, sequenceContext));
         return emitter;
     }
 
@@ -146,25 +150,26 @@ public class AlertAnalysisController {
                                       String conversationId,
                                       SseEmitter emitter,
                                       AtomicBoolean clientConnected,
-                                      AtomicReference<String> analysisId) {
-        AtomicLong aiEventSequence = new AtomicLong();
+                                      AtomicReference<String> analysisId,
+                                      SseSequenceContext sequenceContext) {
         try {
             IncidentReport report = supervisorAgent.analyze(alertText, conversationId, event -> {
                 analysisId.compareAndSet(null, event.analysisId());
-                sendProgress(emitter, clientConnected, event);
+                sendProgress(emitter, clientConnected, sequenceContext, event);
             }, event -> sendAiStreamEvent(
-                    emitter, clientConnected, aiEventSequence.incrementAndGet(), event));
-            sendEvent(emitter, clientConnected, "report", report.analysisId(), report);
+                    emitter, clientConnected, sequenceContext, event));
+            sendEvent(emitter, clientConnected, sequenceContext,
+                    report.analysisId(), "report", report);
             completeIfConnected(emitter, clientConnected);
         } catch (InvalidAlertException exception) {
-            sendStreamError(emitter, clientConnected, analysisId.get(),
+            sendStreamError(emitter, clientConnected, sequenceContext, analysisId.get(),
                     "INVALID_ALERT", exception.getMessage());
         } catch (AnalysisExecutionException exception) {
-            sendStreamError(emitter, clientConnected, exception.getAnalysisId(),
+            sendStreamError(emitter, clientConnected, sequenceContext, exception.getAnalysisId(),
                     "ANALYSIS_FAILED", "告警分析暂时失败，请使用 analysisId 查询日志或稍后重试");
         } catch (RuntimeException exception) {
             log.error("SSE 告警分析发生未预期异常: analysisId={}", analysisId.get(), exception);
-            sendStreamError(emitter, clientConnected, analysisId.get(),
+            sendStreamError(emitter, clientConnected, sequenceContext, analysisId.get(),
                     "INTERNAL_ERROR", "服务暂时不可用，请稍后重试");
         }
     }
@@ -172,28 +177,30 @@ public class AlertAnalysisController {
     /** 把 SupervisorAgent 的阶段事件统一发送为名为 progress 的 SSE 事件。 */
     private void sendProgress(SseEmitter emitter,
                               AtomicBoolean clientConnected,
+                              SseSequenceContext sequenceContext,
                               AnalysisProgressEvent event) {
-        sendEvent(emitter, clientConnected, "progress",
-                event.analysisId() + ":" + event.stage(), event);
+        sendEvent(emitter, clientConnected, sequenceContext,
+                event.analysisId(), "progress", event);
     }
 
     /**
      * 把 Spring AI token 事件发送到独立频道。
      *
-     * <p>事件 ID 使用 Controller 级单调序号，而不是模型片段自己的 sequence。模型 sequence 在
+     * <p>事件 ID 使用 Controller 级单调序号，而不是模型片段自己的 chunkSequence。chunkSequence 在
      * 重试或切换 Provider 时会从零开始；SSE ID 必须始终唯一，浏览器和网关才能正确识别事件。</p>
      */
     private void sendAiStreamEvent(SseEmitter emitter,
                                    AtomicBoolean clientConnected,
-                                   long eventSequence,
+                                   SseSequenceContext sequenceContext,
                                    AiReviewStreamEvent event) {
-        sendEvent(emitter, clientConnected, "ai-token",
-                event.analysisId() + ":ai:" + eventSequence, event);
+        sendEvent(emitter, clientConnected, sequenceContext,
+                event.analysisId(), "ai-token", event);
     }
 
     /** 发送安全错误事件并关闭 SSE 连接。 */
     private void sendStreamError(SseEmitter emitter,
                                  AtomicBoolean clientConnected,
+                                 SseSequenceContext sequenceContext,
                                  String analysisId,
                                  String code,
                                  String message) {
@@ -203,8 +210,8 @@ public class AlertAnalysisController {
                 message,
                 Instant.now()
         );
-        sendEvent(emitter, clientConnected, "error",
-                analysisId == null ? code : analysisId + ":error", error);
+        String runId = analysisId == null || analysisId.isBlank() ? "unassigned" : analysisId;
+        sendEvent(emitter, clientConnected, sequenceContext, runId, "error", error);
         completeIfConnected(emitter, clientConnected);
     }
 
@@ -213,17 +220,22 @@ public class AlertAnalysisController {
      */
     private void sendEvent(SseEmitter emitter,
                            AtomicBoolean clientConnected,
+                           SseSequenceContext sequenceContext,
+                           String runId,
                            String eventName,
-                           String eventId,
                            Object data) {
         if (!clientConnected.get()) {
             return;
         }
         try {
+            long eventId = sequenceContext.nextEventId();
+            long runSequence = sequenceContext.nextRunSequence(runId);
+            SseEventEnvelope<Object> envelope = new SseEventEnvelope<>(
+                    eventId, runId, runSequence, eventName, data, Instant.now());
             emitter.send(SseEmitter.event()
-                    .id(eventId)
+                    .id(Long.toString(eventId))
                     .name(eventName)
-                    .data(data, MediaType.APPLICATION_JSON));
+                    .data(envelope, MediaType.APPLICATION_JSON));
         } catch (IOException | IllegalStateException exception) {
             clientConnected.set(false);
             throw new StreamDeliveryException("failed to deliver SSE event", exception);
@@ -234,6 +246,27 @@ public class AlertAnalysisController {
     private void completeIfConnected(SseEmitter emitter, AtomicBoolean clientConnected) {
         if (clientConnected.compareAndSet(true, false)) {
             emitter.complete();
+        }
+    }
+
+    /**
+     * 保存一条 SSE 连接的两种计数器。
+     *
+     * <p>connectionSequence 为所有 Run 共用，生成协议层全局 id；runSequences 按 runId 分组，
+     * 生成每个业务任务独立的 seq。当前接口一条连接只有一个分析任务，但这里按多 Run 建模，避免
+     * 将来复用连接时再改变前端协议。</p>
+     */
+    private static final class SseSequenceContext {
+        private final AtomicLong connectionSequence = new AtomicLong();
+        private final Map<String, AtomicLong> runSequences = new ConcurrentHashMap<>();
+
+        long nextEventId() {
+            return connectionSequence.incrementAndGet();
+        }
+
+        long nextRunSequence(String runId) {
+            return runSequences.computeIfAbsent(runId, ignored -> new AtomicLong())
+                    .getAndIncrement();
         }
     }
 

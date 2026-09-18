@@ -14,7 +14,8 @@ import java.time.Instant;
  * @param model 当前实际调用的模型名称
  * @param fallbackUsed 是否已经从主模型切换到备用模型
  * @param phase 流式尝试的生命周期阶段
- * @param sequence 当前尝试内的片段序号；START 为 0，DELTA 从 1 递增
+ * @param chunkSequence 当前模型尝试内的片段序号；START 为 0，DELTA 从 1 递增。它不是整个
+ *                      分析 Run 的 seq，重试或切换备用模型时会重新从 0 开始
  * @param delta 本次新增文本；START 和 COMPLETE 阶段为空字符串
  * @param occurredAt 事件创建时间
  */
@@ -24,7 +25,7 @@ public record AiReviewStreamEvent(
         String model,
         boolean fallbackUsed,
         AiReviewStreamPhase phase,
-        int sequence,
+        int chunkSequence,
         String delta,
         Instant occurredAt) {
 
@@ -41,8 +42,8 @@ public record AiReviewStreamEvent(
         if (phase == null) {
             throw new IllegalArgumentException("phase must not be null");
         }
-        if (sequence < 0) {
-            throw new IllegalArgumentException("sequence must not be negative");
+        if (chunkSequence < 0) {
+            throw new IllegalArgumentException("chunkSequence must not be negative");
         }
         delta = delta == null ? "" : delta;
         occurredAt = occurredAt == null ? Instant.now() : occurredAt;

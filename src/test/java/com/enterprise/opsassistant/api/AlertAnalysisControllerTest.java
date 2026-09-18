@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
@@ -185,6 +186,11 @@ class AlertAnalysisControllerTest {
         // SSE 中包含中文模型增量，测试必须显式按接口约定的 UTF-8 解码，不能使用 MockMvc 默认字符集。
         String stream = completedResult.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(stream)
+                // 第一条事件的协议 id 与 JSON 信封 id/seq 必须从 1/0 开始。
+                .contains("id:1\n")
+                .contains("\"id\":1")
+                .contains("\"seq\":0")
+                .contains("\"type\":\"progress\"")
                 .contains("event:progress")
                 .contains("\"stage\":\"RECEIVED\"")
                 .contains("\"stage\":\"AI_REVIEWED\"")
@@ -193,6 +199,7 @@ class AlertAnalysisControllerTest {
                 .contains("\"phase\":\"START\"")
                 .contains("\"phase\":\"DELTA\"")
                 .contains("\"phase\":\"COMPLETE\"")
+                .contains("\"chunkSequence\":")
                 .contains("AI Mock 复核完成")
                 .contains("event:report")
                 .contains("\"serviceName\":\"payment-service\"")
@@ -201,6 +208,30 @@ class AlertAnalysisControllerTest {
                 .isLessThan(stream.indexOf("event:report"));
         assertThat(stream.indexOf("\"phase\":\"START\""))
                 .isLessThan(stream.indexOf("\"phase\":\"COMPLETE\""));
+
+        // 解析每个 data 行，验证不是只有第一条正确，而是整条连接的 id 与 Run seq 都连续递增。
+        List<Long> protocolIds = stream.lines()
+                .filter(line -> line.startsWith("id:"))
+                .map(line -> Long.parseLong(line.substring(3)))
+                .toList();
+        List<JsonNode> envelopes = stream.lines()
+                .filter(line -> line.startsWith("data:"))
+                .map(line -> {
+                    try {
+                        return objectMapper.readTree(line.substring(5));
+                    } catch (Exception exception) {
+                        throw new AssertionError("SSE data must contain valid JSON", exception);
+                    }
+                })
+                .toList();
+        String runId = envelopes.get(0).path("runId").asText();
+        for (int index = 0; index < envelopes.size(); index++) {
+            long expectedId = index + 1L;
+            assertThat(protocolIds.get(index)).isEqualTo(expectedId);
+            assertThat(envelopes.get(index).path("id").asLong()).isEqualTo(expectedId);
+            assertThat(envelopes.get(index).path("seq").asLong()).isEqualTo(index);
+            assertThat(envelopes.get(index).path("runId").asText()).isEqualTo(runId);
+        }
     }
 
     /** Markdown 接口应返回可下载报告，并包含证据、根因、处置和人工确认声明。 */

@@ -148,7 +148,7 @@ public class ResilientSpringAiClientInvoker {
 
         long startedAt = System.nanoTime();
         Supplier<T> call = () -> {
-            AtomicInteger sequence = new AtomicInteger();
+            AtomicInteger chunkSequence = new AtomicInteger();
             emitStreamEvent(observer, new AiReviewStreamEvent(
                     analysisId.trim(), provider.providerName(), provider.modelName(), fallbackUsed,
                     AiReviewStreamPhase.START, 0, "", Instant.now()));
@@ -162,7 +162,7 @@ public class ResilientSpringAiClientInvoker {
                     .content()
                     .doOnNext(delta -> emitStreamEvent(observer, new AiReviewStreamEvent(
                             analysisId.trim(), provider.providerName(), provider.modelName(), fallbackUsed,
-                            AiReviewStreamPhase.DELTA, sequence.incrementAndGet(), delta, Instant.now())))
+                            AiReviewStreamPhase.DELTA, chunkSequence.incrementAndGet(), delta, Instant.now())))
                     .collectList()
                     .map(parts -> String.join("", parts))
                     .block();
@@ -180,7 +180,7 @@ public class ResilientSpringAiClientInvoker {
             }
             emitStreamEvent(observer, new AiReviewStreamEvent(
                     analysisId.trim(), provider.providerName(), provider.modelName(), fallbackUsed,
-                    AiReviewStreamPhase.COMPLETE, sequence.get(), "", Instant.now()));
+                    AiReviewStreamPhase.COMPLETE, chunkSequence.get(), "", Instant.now()));
             return result;
         };
 

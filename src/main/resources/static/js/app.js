@@ -25,7 +25,10 @@
         conversationId: null,
         latestAlert: "",
         latestReport: null,
-        analyzing: false
+        analyzing: false,
+        // id 校验整条连接的顺序；Map 分别记录每个 runId 下一条应到达的 seq。
+        lastSseId: 0,
+        nextRunSequences: new Map()
     };
 
     const elements = {
@@ -106,6 +109,8 @@
         elements.aiStream.hidden = true;
         elements.aiStreamProvider.textContent = "等待模型响应";
         elements.aiStreamContent.textContent = "";
+        state.lastSseId = 0;
+        state.nextRunSequences.clear();
         elements.stageList.querySelectorAll("li").forEach(item => {
             item.classList.remove("active", "complete");
         });
@@ -185,12 +190,18 @@
         }
     }
 
-    /** 将一帧 SSE 文本转换成 {type, data}；注释行和 id 行不参与页面渲染。 */
+    /**
+     * 将一帧 SSE 文本转换成统一事件信封，并检查协议 id 与 Run seq。
+     * 重复事件直接忽略；发现跳号会记录警告但继续展示，避免一次观测缺口让整份报告不可用。
+     */
     function dispatchSseFrame(frame, onEvent) {
         let type = "message";
+        let protocolId = null;
         const dataLines = [];
         frame.split("\n").forEach(line => {
-            if (line.startsWith("event:")) {
+            if (line.startsWith("id:")) {
+                protocolId = line.slice(3).trim();
+            } else if (line.startsWith("event:")) {
                 type = line.slice(6).trim();
             } else if (line.startsWith("data:")) {
                 dataLines.push(line.slice(5).trimStart());
@@ -202,9 +213,44 @@
         }
         const rawData = dataLines.join("\n");
         try {
-            onEvent(type, JSON.parse(rawData));
+            const envelope = JSON.parse(rawData);
+            validateSseEnvelope(protocolId, type, envelope);
+
+            // id 或 seq 小于期望值表示重复投递；当前页面已经处理过，不再次渲染。
+            const expectedRunSequence = state.nextRunSequences.get(envelope.runId) ?? 0;
+            if (envelope.id <= state.lastSseId || envelope.seq < expectedRunSequence) {
+                return;
+            }
+            if (envelope.id > state.lastSseId + 1 || envelope.seq > expectedRunSequence) {
+                console.warn("SSE 事件出现跳号", {
+                    expectedId: state.lastSseId + 1,
+                    actualId: envelope.id,
+                    expectedSeq: expectedRunSequence,
+                    actualSeq: envelope.seq,
+                    runId: envelope.runId
+                });
+            }
+
+            state.lastSseId = envelope.id;
+            state.nextRunSequences.set(envelope.runId, envelope.seq + 1);
+            onEvent(type, envelope.data, envelope);
         } catch (error) {
             throw new Error("服务端返回了无法解析的流式数据", {cause: error});
+        }
+    }
+
+    /** 协议层 id/event 与 JSON 信封必须完全一致，否则说明代理或服务端产生了损坏事件。 */
+    function validateSseEnvelope(protocolId, eventType, envelope) {
+        if (!envelope || !Number.isInteger(envelope.id) || envelope.id < 1
+            || !Number.isInteger(envelope.seq) || envelope.seq < 0
+            || !envelope.runId || !envelope.type || envelope.data == null) {
+            throw new Error("SSE 事件信封字段不完整");
+        }
+        if (protocolId !== String(envelope.id)) {
+            throw new Error("SSE 协议 id 与事件信封 id 不一致");
+        }
+        if (eventType !== envelope.type) {
+            throw new Error("SSE event 与事件信封 type 不一致");
         }
     }
 
