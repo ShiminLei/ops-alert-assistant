@@ -7,8 +7,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -67,5 +72,38 @@ class AlertAnalysisControllerTest {
                 .andExpect(jsonPath("$.message").value("请求参数校验失败"))
                 .andExpect(jsonPath("$.path").value("/api/v1/alerts/analyze"))
                 .andExpect(jsonPath("$.fieldErrors.alertText").value("告警内容不能为空"));
+    }
+
+    /** 流式接口应依次返回 progress 事件，并以包含完整报告的 report 事件结束。 */
+    @Test
+    void shouldStreamProgressAndFinalReport() throws Exception {
+        String requestBody = """
+                {
+                  "alertText": "支付服务刚发布后大量请求超时，错误率18.7%，用户支付失败"
+                }
+                """;
+
+        MvcResult initialResult = mockMvc.perform(post("/api/v1/alerts/analyze/stream")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content(requestBody))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        MvcResult completedResult = mockMvc.perform(asyncDispatch(initialResult))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andReturn();
+
+        String stream = completedResult.getResponse().getContentAsString();
+        assertThat(stream)
+                .contains("event:progress")
+                .contains("\"stage\":\"RECEIVED\"")
+                .contains("\"stage\":\"COMPLETED\"")
+                .contains("event:report")
+                .contains("\"serviceName\":\"payment-service\"")
+                .contains("\"finalRisk\":\"HIGH\"");
+        assertThat(stream.indexOf("\"stage\":\"RECEIVED\""))
+                .isLessThan(stream.indexOf("event:report"));
     }
 }
