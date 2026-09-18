@@ -1,5 +1,10 @@
 package com.enterprise.opsassistant.api;
 
+import com.enterprise.opsassistant.ai.AiMessage;
+import com.enterprise.opsassistant.ai.AiRole;
+import com.enterprise.opsassistant.ai.ChatMemoryService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
@@ -36,6 +41,12 @@ class AlertAnalysisControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private ChatMemoryService chatMemory;
+
     /** 正常请求应返回结构化事故报告，并包含至少三条真实工具证据。 */
     @Test
     void shouldAnalyzeNaturalLanguageAlert() throws Exception {
@@ -50,6 +61,7 @@ class AlertAnalysisControllerTest {
                         .content(requestBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.analysisId").isNotEmpty())
+                .andExpect(jsonPath("$.conversationId").isNotEmpty())
                 .andExpect(jsonPath("$.recognition.serviceName").value("payment-service"))
                 .andExpect(jsonPath("$.recognition.alertType").value("POST_DEPLOYMENT_FAILURE"))
                 .andExpect(jsonPath("$.evidence.length()").value(6))
@@ -74,6 +86,37 @@ class AlertAnalysisControllerTest {
                         "ops_assistant_ai_provider_calls_total")));
     }
 
+    /** 首轮自动创建会话，第二轮携带同一编号后应复用并追加 Chat Memory。 */
+    @Test
+    void shouldContinueConversationWithChatMemory() throws Exception {
+        MvcResult firstResult = mockMvc.perform(post("/api/v1/alerts/analyze")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "alertText": "支付服务发布后错误率18.7%，用户支付失败"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversationId").isNotEmpty())
+                .andReturn();
+        JsonNode firstReport = objectMapper.readTree(firstResult.getResponse().getContentAsString());
+        String conversationId = firstReport.path("conversationId").asText();
+        String followUpRequest = objectMapper.writeValueAsString(java.util.Map.of(
+                "alertText", "支付服务当前错误率降到2%，请继续复核是否恢复",
+                "conversationId", conversationId
+        ));
+
+        mockMvc.perform(post("/api/v1/alerts/analyze")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(followUpRequest))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversationId").value(conversationId));
+
+        assertThat(chatMemory.history(conversationId))
+                .extracting(AiMessage::role)
+                .containsExactly(AiRole.USER, AiRole.ASSISTANT, AiRole.USER, AiRole.ASSISTANT);
+    }
+
     /** 空告警应在进入 SupervisorAgent 前被校验，并返回统一 400 错误结构。 */
     @Test
     void shouldReturnValidationErrorForBlankAlert() throws Exception {
@@ -92,6 +135,26 @@ class AlertAnalysisControllerTest {
                 .andExpect(jsonPath("$.message").value("请求参数校验失败"))
                 .andExpect(jsonPath("$.path").value("/api/v1/alerts/analyze"))
                 .andExpect(jsonPath("$.fieldErrors.alertText").value("告警内容不能为空"));
+    }
+
+    /**
+     * 会话编号会作为内存索引使用，因此只接受字母、数字、下划线和短横线。
+     * 在入口拒绝斜杠等特殊字符，也能避免编号被误当成路径或日志控制字符。
+     */
+    @Test
+    void shouldReturnValidationErrorForInvalidConversationId() throws Exception {
+        mockMvc.perform(post("/api/v1/alerts/analyze")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "alertText": "请继续分析支付服务告警",
+                                  "conversationId": "conversation/../../invalid"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors.conversationId")
+                        .value("会话编号格式不正确"));
     }
 
     /** 流式接口应依次返回 progress 事件，并以包含完整报告的 report 事件结束。 */

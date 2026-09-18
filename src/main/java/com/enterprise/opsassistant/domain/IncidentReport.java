@@ -11,7 +11,8 @@ import java.util.Objects;
  * 以及前端展示的统一数据来源。保留模型与降级信息，可以让使用者知道结论由哪个模型生成，
  * 也方便排查主模型失败后备用模型是否正常接管。</p>
  *
- * @param analysisId 本次分析的唯一编号，用于关联日志、指标、会话和报告
+ * @param analysisId 本次分析的唯一编号，用于关联日志、指标和报告
+ * @param conversationId 多轮追问的会话编号；同一会话可以包含多个不同 analysisId
  * @param originalAlert 用户提交的原始自然语言告警，便于审计且不能被结构化结果替代
  * @param recognition 告警识别阶段的结构化结果
  * @param evidence 本次实际收集到的全部工具证据，包括失败和部分成功的调用
@@ -25,6 +26,7 @@ import java.util.Objects;
  */
 public record IncidentReport(
         String analysisId,
+        String conversationId,
         String originalAlert,
         AlertRecognition recognition,
         List<ToolEvidence> evidence,
@@ -44,6 +46,7 @@ public record IncidentReport(
      */
     public IncidentReport {
         analysisId = requireText(analysisId, "analysisId");
+        conversationId = requireText(conversationId, "conversationId");
         originalAlert = requireText(originalAlert, "originalAlert");
         recognition = Objects.requireNonNull(recognition, "recognition must not be null");
         evidence = List.copyOf(Objects.requireNonNullElse(evidence, List.of()));

@@ -58,6 +58,7 @@ class SupervisorAgentTest {
         );
 
         assertThat(report.analysisId()).isNotBlank();
+        assertThat(report.conversationId()).isNotBlank();
         assertThat(report.recognition().serviceName()).isEqualTo("payment-service");
         assertThat(report.evidence()).hasSize(6);
         assertThat(report.rootCause().finalRisk()).isEqualTo(RiskLevel.HIGH);

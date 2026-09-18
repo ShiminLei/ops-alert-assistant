@@ -58,6 +58,7 @@ public class MarkdownReportGenerator {
                 .append("| 项目 | 内容 |\n")
                 .append("|---|---|\n")
                 .append("| 分析编号 | `").append(inlineCode(report.analysisId())).append("` |\n")
+                .append("| 会话编号 | `").append(inlineCode(report.conversationId())).append("` |\n")
                 .append("| 生成时间 | ").append(tableText(report.generatedAt().toString())).append(" |\n")
                 .append("| 服务 | `").append(inlineCode(report.recognition().serviceName())).append("` |\n")
                 .append("| 告警类型 | `").append(report.recognition().alertType()).append("` |\n")

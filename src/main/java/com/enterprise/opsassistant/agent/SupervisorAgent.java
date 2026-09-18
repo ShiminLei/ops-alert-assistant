@@ -92,8 +92,17 @@ public class SupervisorAgent {
      * @return 完整结构化事故报告
      */
     public IncidentReport analyze(String rawAlert) {
-        return analyze(rawAlert, event -> {
+        return analyze(rawAlert, null, event -> {
             // 同步调用方不需要消费事件；阶段仍会写入统一日志。
+        });
+    }
+
+    /**
+     * 同步完成一次带 Chat Memory 的分析。会话编号为空时会自动开启新会话。
+     */
+    public IncidentReport analyze(String rawAlert, String conversationId) {
+        return analyze(rawAlert, conversationId, event -> {
+            // 普通 JSON 调用方只需要最终报告。
         });
     }
 
@@ -108,8 +117,23 @@ public class SupervisorAgent {
      * @return 完整结构化事故报告
      */
     public IncidentReport analyze(String rawAlert, Consumer<AnalysisProgressEvent> observer) {
+        return analyze(rawAlert, null, observer);
+    }
+
+    /**
+     * 完成一次带会话上下文的分析，并把每个阶段事件交给 observer。
+     *
+     * @param rawAlert 当前轮的自然语言告警或追问
+     * @param conversationId 可选会话编号；为空则生成新 UUID
+     * @param observer 阶段事件观察者；传入 null 等同于不订阅
+     * @return 包含 conversationId 的完整事故报告
+     */
+    public IncidentReport analyze(String rawAlert,
+                                  String conversationId,
+                                  Consumer<AnalysisProgressEvent> observer) {
         long startedAt = System.nanoTime();
         String analysisId = UUID.randomUUID().toString();
+        String effectiveConversationId = normalizeConversationId(conversationId);
         Consumer<AnalysisProgressEvent> safeObserver = observer == null ? event -> { } : observer;
 
         try (MDC.MDCCloseable ignored = MDC.putCloseable("traceId", analysisId)) {
@@ -136,6 +160,7 @@ public class SupervisorAgent {
                 var responsePlan = responsePlanAgent.plan(recognition, rootCause, evidenceCollection);
                 AiReviewResult aiReview = opsAnalysisAiService.review(
                         analysisId,
+                        effectiveConversationId,
                         rawAlert,
                         recognition,
                         evidenceCollection,
@@ -149,6 +174,7 @@ public class SupervisorAgent {
                                 : "AI 模型已完成证据复核");
                 IncidentReport report = new IncidentReport(
                         analysisId,
+                        effectiveConversationId,
                         rawAlert.trim(),
                         recognition,
                         evidenceCollection.evidence(),
@@ -197,6 +223,13 @@ public class SupervisorAgent {
     /** 统一使用单调递增时钟计算分析耗时，不受系统时间校准影响。 */
     private Duration elapsedSince(long startedAt) {
         return Duration.ofNanos(System.nanoTime() - startedAt);
+    }
+
+    /** 首轮请求自动创建会话，后续轮次保留并规范化调用方传入的编号。 */
+    private String normalizeConversationId(String conversationId) {
+        return conversationId == null || conversationId.isBlank()
+                ? UUID.randomUUID().toString()
+                : conversationId.trim();
     }
 
     /**

@@ -71,7 +71,7 @@ public class AlertAnalysisController {
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     public IncidentReport analyze(@Valid @RequestBody AnalyzeAlertRequest request) {
-        return supervisorAgent.analyze(request.alertText());
+        return supervisorAgent.analyze(request.alertText(), request.conversationId());
     }
 
     /**
@@ -86,7 +86,7 @@ public class AlertAnalysisController {
             produces = "text/markdown;charset=UTF-8"
     )
     public ResponseEntity<String> analyzeMarkdown(@Valid @RequestBody AnalyzeAlertRequest request) {
-        IncidentReport report = supervisorAgent.analyze(request.alertText());
+        IncidentReport report = supervisorAgent.analyze(request.alertText(), request.conversationId());
         String markdown = markdownReportGenerator.generate(report);
         String filename = "incident-report-" + report.analysisId() + ".md";
         return ResponseEntity.ok()
@@ -131,7 +131,7 @@ public class AlertAnalysisController {
         });
 
         analysisTaskExecutor.execute(() -> runStreamingAnalysis(
-                request.alertText(), emitter, clientConnected, analysisId));
+                request.alertText(), request.conversationId(), emitter, clientConnected, analysisId));
         return emitter;
     }
 
@@ -140,11 +140,12 @@ public class AlertAnalysisController {
      * HTTP 连接建立后的异常必须转换成 error 事件，不能再交给普通全局异常处理器。
      */
     private void runStreamingAnalysis(String alertText,
+                                      String conversationId,
                                       SseEmitter emitter,
                                       AtomicBoolean clientConnected,
                                       AtomicReference<String> analysisId) {
         try {
-            IncidentReport report = supervisorAgent.analyze(alertText, event -> {
+            IncidentReport report = supervisorAgent.analyze(alertText, conversationId, event -> {
                 analysisId.compareAndSet(null, event.analysisId());
                 sendProgress(emitter, clientConnected, event);
             });

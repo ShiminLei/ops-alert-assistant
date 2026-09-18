@@ -59,6 +59,7 @@ class MarkdownReportGeneratorTest {
                 "## 5. 根因与风险判断",
                 "## 6. 建议处置动作",
                 "## 7. 后续观察指标",
+                "| 会话编号 | `" + report.conversationId() + "` |",
                 "95%",
                 report.evidence().get(0).evidenceId(),
                 "- [ ] 服务错误率"

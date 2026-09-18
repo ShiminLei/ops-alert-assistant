@@ -48,6 +48,9 @@ public class OpsAssistantAiProperties {
     }
 
     public void setMaxHistoryMessages(int maxHistoryMessages) {
+        if (maxHistoryMessages < 2) {
+            throw new IllegalArgumentException("maxHistoryMessages must be at least 2");
+        }
         this.maxHistoryMessages = maxHistoryMessages;
     }
 
