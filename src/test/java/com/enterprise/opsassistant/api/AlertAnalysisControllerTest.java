@@ -9,6 +9,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.nio.charset.StandardCharsets;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -105,5 +107,34 @@ class AlertAnalysisControllerTest {
                 .contains("\"finalRisk\":\"HIGH\"");
         assertThat(stream.indexOf("\"stage\":\"RECEIVED\""))
                 .isLessThan(stream.indexOf("event:report"));
+    }
+
+    /** Markdown 接口应返回可下载报告，并包含证据、根因、处置和人工确认声明。 */
+    @Test
+    void shouldDownloadMarkdownIncidentReport() throws Exception {
+        String requestBody = """
+                {
+                  "alertText": "支付服务刚发布后大量请求超时，错误率18.7%，用户支付失败"
+                }
+                """;
+
+        MvcResult result = mockMvc.perform(post("/api/v1/alerts/analyze/markdown")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept("text/markdown")
+                        .content(requestBody))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/markdown"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Content-Disposition", org.hamcrest.Matchers.containsString("incident-report-")))
+                .andReturn();
+
+        String markdown = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(markdown)
+                .contains("# 企业运维告警智能处置报告")
+                .contains("## 4. 运维工具证据")
+                .contains("数据库连接池容量耗尽")
+                .contains("## 6. 建议处置动作")
+                .contains("从 2.4.1 回滚到 2.4.0")
+                .contains("生产回滚、扩容、限流和配置修改均需由有权限的人员确认");
     }
 }

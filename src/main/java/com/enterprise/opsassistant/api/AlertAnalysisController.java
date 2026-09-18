@@ -5,11 +5,13 @@ import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
 import com.enterprise.opsassistant.domain.IncidentReport;
 import com.enterprise.opsassistant.exception.AnalysisExecutionException;
 import com.enterprise.opsassistant.exception.InvalidAlertException;
+import com.enterprise.opsassistant.report.MarkdownReportGenerator;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -39,6 +41,7 @@ public class AlertAnalysisController {
 
     private final SupervisorAgent supervisorAgent;
     private final Executor analysisTaskExecutor;
+    private final MarkdownReportGenerator markdownReportGenerator;
 
     /**
      * 使用构造器注入总编排器和专用线程池。
@@ -46,9 +49,11 @@ public class AlertAnalysisController {
      */
     public AlertAnalysisController(
             SupervisorAgent supervisorAgent,
-            @Qualifier("analysisTaskExecutor") Executor analysisTaskExecutor) {
+            @Qualifier("analysisTaskExecutor") Executor analysisTaskExecutor,
+            MarkdownReportGenerator markdownReportGenerator) {
         this.supervisorAgent = supervisorAgent;
         this.analysisTaskExecutor = analysisTaskExecutor;
+        this.markdownReportGenerator = markdownReportGenerator;
     }
 
     /**
@@ -67,6 +72,27 @@ public class AlertAnalysisController {
     )
     public IncidentReport analyze(@Valid @RequestBody AnalyzeAlertRequest request) {
         return supervisorAgent.analyze(request.alertText());
+    }
+
+    /**
+     * 完成告警分析并把同一份 IncidentReport 导出成可下载的 Markdown 文件。
+     *
+     * @param request 包含自然语言告警的 JSON 请求
+     * @return text/markdown 内容，文件名包含 analysisId 便于归档和关联日志
+     */
+    @PostMapping(
+            path = "/analyze/markdown",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = "text/markdown;charset=UTF-8"
+    )
+    public ResponseEntity<String> analyzeMarkdown(@Valid @RequestBody AnalyzeAlertRequest request) {
+        IncidentReport report = supervisorAgent.analyze(request.alertText());
+        String markdown = markdownReportGenerator.generate(report);
+        String filename = "incident-report-" + report.analysisId() + ".md";
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/markdown;charset=UTF-8"))
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .body(markdown);
     }
 
     /**
