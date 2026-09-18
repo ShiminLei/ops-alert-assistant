@@ -58,7 +58,9 @@ class FrontendPageTest {
 
         mockMvc.perform(get("/js/app.js"))
                 .andExpect(status().isOk())
-                .andExpect(content().contentTypeCompatibleWith("application/javascript"))
+                // Spring Boot 3.5 按新的媒体类型注册表为 .js 返回 text/javascript。
+                // 这是浏览器认可的标准 JavaScript 类型，不影响脚本加载和执行。
+                .andExpect(content().contentTypeCompatibleWith("text/javascript"))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString(
                         "/api/v1/alerts/analyze/stream")));
     }

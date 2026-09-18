@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.5</version>
+        <version>3.5.15</version>
         <relativePath/>
     </parent>
 
@@ -19,9 +19,32 @@
 
     <properties>
         <java.version>17</java.version>
+        <!--
+            Spring AI 1.1.x 与 Spring Boot 3.5.x 配套使用。
+            把版本集中放在 properties 中，后续升级时只需要修改这一处，
+            不必在每一个 Spring AI 依赖上分别填写版本号。
+        -->
+        <spring-ai.version>1.1.8</spring-ai.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <springdoc.version>2.6.0</springdoc.version>
     </properties>
+
+    <!--
+        Spring AI BOM（Bill Of Materials，依赖版本清单）负责统一管理所有
+        Spring AI 模块的版本，避免 ChatClient、模型实现、Tool Calling 等模块
+        因版本不一致而在运行时出现方法找不到的问题。
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -47,6 +70,17 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!--
+            Spring AI 的 OpenAI 兼容模型 Starter。
+            除 OpenAI 外，DeepSeek、阿里百炼等提供兼容接口的模型服务也可以
+            通过它接入，从而获得 ChatClient、结构化输出、流式响应、Tool Calling
+            和模型调用可观测性等 Spring AI 原生能力。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
 
         <dependency>

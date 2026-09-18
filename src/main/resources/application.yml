@@ -5,6 +5,19 @@ spring:
     default: local
   jackson:
     default-property-inclusion: non_null
+  ai:
+    openai:
+      #
+      # Spring AI 的 OpenAI 模型实现同样可以连接 DeepSeek、百炼等
+      # OpenAI 兼容接口。这里的占位值只负责让“纯 Mock 开发模式”能够
+      # 正常启动；真正调用远程模型前，业务配置层还会检查是否设置了真实 Key。
+      # 不要把真实密钥写进配置文件，应通过 AI_DEEPSEEK_API_KEY 环境变量传入。
+      api-key: ${AI_DEEPSEEK_API_KEY:not-configured}
+      base-url: ${AI_DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${AI_DEEPSEEK_MODEL:deepseek-chat}
+          temperature: ${AI_DEEPSEEK_TEMPERATURE:0.2}
 
 server:
   port: ${SERVER_PORT:8080}
