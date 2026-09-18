@@ -158,7 +158,10 @@ class AlertAnalysisControllerTest {
                         .value("会话编号格式不正确"));
     }
 
-    /** 流式接口应依次返回 progress 事件，并以包含完整报告的 report 事件结束。 */
+    /**
+     * 流式接口应同时返回 Java 阶段、Spring AI 增量内容，并以完整报告结束。
+     * START、DELTA、COMPLETE 证明测试真正经过了 ChatClient.stream() 和最终结构化转换。
+     */
     @Test
     void shouldStreamProgressAndFinalReport() throws Exception {
         String requestBody = """
@@ -179,17 +182,25 @@ class AlertAnalysisControllerTest {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
                 .andReturn();
 
-        String stream = completedResult.getResponse().getContentAsString();
+        // SSE 中包含中文模型增量，测试必须显式按接口约定的 UTF-8 解码，不能使用 MockMvc 默认字符集。
+        String stream = completedResult.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(stream)
                 .contains("event:progress")
                 .contains("\"stage\":\"RECEIVED\"")
                 .contains("\"stage\":\"AI_REVIEWED\"")
                 .contains("\"stage\":\"COMPLETED\"")
+                .contains("event:ai-token")
+                .contains("\"phase\":\"START\"")
+                .contains("\"phase\":\"DELTA\"")
+                .contains("\"phase\":\"COMPLETE\"")
+                .contains("AI Mock 复核完成")
                 .contains("event:report")
                 .contains("\"serviceName\":\"payment-service\"")
                 .contains("\"finalRisk\":\"HIGH\"");
         assertThat(stream.indexOf("\"stage\":\"RECEIVED\""))
                 .isLessThan(stream.indexOf("event:report"));
+        assertThat(stream.indexOf("\"phase\":\"START\""))
+                .isLessThan(stream.indexOf("\"phase\":\"COMPLETE\""));
     }
 
     /** Markdown 接口应返回可下载报告，并包含证据、根因、处置和人工确认声明。 */

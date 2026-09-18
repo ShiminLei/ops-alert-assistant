@@ -7,6 +7,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,37 @@ class SpringAiModelRouterTest {
         assertThat(result.provider()).isEqualTo("backup");
         assertThat(result.model()).isEqualTo("backup-model");
         assertThat(result.fallbackUsed()).isTrue();
+    }
+
+    /**
+     * 流式主模型失败后，备用模型必须发出新的 START 边界再输出内容。
+     * 前端依靠这个边界清除主模型可能留下的半截响应，不能把两个模型的 JSON 拼接起来。
+     */
+    @Test
+    void shouldResetStreamingAttemptWhenBackupTakesOver() {
+        SpringAiModelRouter router = router(
+                failingModel("primary stream unavailable"), new DeterministicOpsChatModel());
+        List<AiReviewStreamEvent> events = new ArrayList<>();
+
+        SpringAiRoutingResult<AiReviewStructuredOutput> result = router.streamWithFallback(
+                "analysis-stream-fallback",
+                "conversation-stream-fallback",
+                List.of(new UserMessage("请流式复核测试告警")),
+                AiReviewStructuredOutput.class,
+                events::add);
+
+        assertThat(result.provider()).isEqualTo("backup");
+        assertThat(result.fallbackUsed()).isTrue();
+        assertThat(events).extracting(AiReviewStreamEvent::phase)
+                .startsWith(AiReviewStreamPhase.START, AiReviewStreamPhase.START)
+                .endsWith(AiReviewStreamPhase.COMPLETE);
+        assertThat(events).filteredOn(event -> event.phase() == AiReviewStreamPhase.START)
+                .extracting(AiReviewStreamEvent::provider, AiReviewStreamEvent::fallbackUsed)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("primary", false),
+                        org.assertj.core.groups.Tuple.tuple("backup", true));
+        assertThat(events).filteredOn(event -> event.phase() == AiReviewStreamPhase.DELTA)
+                .allMatch(AiReviewStreamEvent::fallbackUsed);
     }
 
     /** 主备都失败时应抛出聚合异常，让上层明确退回 Java 安全规则结果。 */

@@ -1,6 +1,7 @@
 package com.enterprise.opsassistant.agent;
 
 import com.enterprise.opsassistant.ai.AiReviewResult;
+import com.enterprise.opsassistant.ai.AiReviewStreamEvent;
 import com.enterprise.opsassistant.ai.OpsAnalysisAiService;
 import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
 import com.enterprise.opsassistant.domain.AnalysisStage;
@@ -131,10 +132,33 @@ public class SupervisorAgent {
     public IncidentReport analyze(String rawAlert,
                                   String conversationId,
                                   Consumer<AnalysisProgressEvent> observer) {
+        return analyze(rawAlert, conversationId, observer, event -> {
+            // 普通同步调用只需要阶段或最终报告，不消费模型 token。
+        });
+    }
+
+    /**
+     * 完成一次分析，并分别发布确定性阶段事件与 Spring AI 模型流事件。
+     *
+     * <p>两个观察者刻意分开：阶段事件来自 Java 编排器，可以直接表达可靠的执行状态；模型流
+     * 事件来自外部模型，只用于实时展示生成过程，不能替代最终的结构化转换和安全规则判断。</p>
+     *
+     * @param rawAlert 当前轮自然语言告警或追问
+     * @param conversationId 可选会话编号；为空则生成新 UUID
+     * @param observer Java 分析阶段观察者
+     * @param aiStreamObserver AI 模型流式内容观察者
+     * @return 完整且经过安全规则约束的事故报告
+     */
+    public IncidentReport analyze(String rawAlert,
+                                  String conversationId,
+                                  Consumer<AnalysisProgressEvent> observer,
+                                  Consumer<AiReviewStreamEvent> aiStreamObserver) {
         long startedAt = System.nanoTime();
         String analysisId = UUID.randomUUID().toString();
         String effectiveConversationId = normalizeConversationId(conversationId);
         Consumer<AnalysisProgressEvent> safeObserver = observer == null ? event -> { } : observer;
+        Consumer<AiReviewStreamEvent> safeAiStreamObserver =
+                aiStreamObserver == null ? event -> { } : aiStreamObserver;
 
         try (MDC.MDCCloseable ignored = MDC.putCloseable("traceId", analysisId)) {
             emit(safeObserver, analysisId, AnalysisStage.RECEIVED, "已收到告警，开始分析");
@@ -165,7 +189,8 @@ public class SupervisorAgent {
                         recognition,
                         evidenceCollection,
                         rootCause,
-                        responsePlan
+                        responsePlan,
+                        safeAiStreamObserver
                 );
                 var reviewedRootCause = appendAiReview(rootCause, aiReview);
                 emit(safeObserver, analysisId, AnalysisStage.AI_REVIEWED,

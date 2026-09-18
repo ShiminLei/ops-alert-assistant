@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * 面向运维事故场景的 AI Service。
@@ -77,6 +78,26 @@ public class OpsAnalysisAiService {
                                  EvidenceCollectionResult evidence,
                                  RootCauseAssessment rootCause,
                                  ResponsePlan responsePlan) {
+        return review(analysisId, conversationId, originalAlert, recognition,
+                evidence, rootCause, responsePlan, event -> {
+                    // 同步 JSON 接口不消费 token，但仍使用同一套 Spring AI 流式调用链。
+                });
+    }
+
+    /**
+     * 调用主备模型，并把模型真正生成的片段交给观察者。
+     *
+     * <p>观察者只负责展示，不参与模型结果判断。最终仍必须收齐全部片段并成功转换为
+     * {@link AiReviewStructuredOutput}，才会组装 AiReviewResult 和提交会话记忆。</p>
+     */
+    public AiReviewResult review(String analysisId,
+                                 String conversationId,
+                                 String originalAlert,
+                                 AlertRecognition recognition,
+                                 EvidenceCollectionResult evidence,
+                                 RootCauseAssessment rootCause,
+                                 ResponsePlan responsePlan,
+                                 Consumer<AiReviewStreamEvent> streamObserver) {
         if (!enabled) {
             return AiReviewResult.ruleOnly("AI 复核未启用，保留 Java 规则分析结果", false);
         }
@@ -93,8 +114,9 @@ public class OpsAnalysisAiService {
         List<Message> messages = List.of(new UserMessage(userPrompt));
 
         try {
-            SpringAiRoutingResult<AiReviewStructuredOutput> routing = router.callWithFallback(
-                    conversationId, messages, AiReviewStructuredOutput.class);
+            SpringAiRoutingResult<AiReviewStructuredOutput> routing = router.streamWithFallback(
+                    analysisId, conversationId, messages,
+                    AiReviewStructuredOutput.class, streamObserver);
             AiReviewResult result = new AiReviewResult(
                     routing.body().toNarrative(),
                     routing.provider(),

@@ -307,6 +307,13 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56, 232
 .stage-list li.complete { color: var(--accent); }
 .stage-list li.complete::before { border-color: var(--accent); background: var(--accent); }
 
+/* 模型流单独放在可滚动的代码区，既保留真实 token 到达效果，也不让长 JSON 撑坏工作区。 */
+.ai-stream { margin-top: 1rem; overflow: hidden; border: 1px solid rgba(92, 200, 255, 0.28); border-radius: 10px; background: rgba(4, 13, 22, 0.72); }
+.ai-stream header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--line); }
+.ai-stream header strong { color: var(--cyan); font-size: 0.78rem; letter-spacing: 0.08em; }
+.ai-stream header span { color: var(--muted); font: 0.7rem ui-monospace, monospace; text-align: right; }
+.ai-stream pre { max-height: 190px; margin: 0; padding: 0.9rem; overflow: auto; color: #bad8e6; font: 0.76rem/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .error-banner { margin: 1.3rem 0; padding: 1rem; color: #ffd5da; border: 1px solid rgba(255, 107, 122, 0.35); border-radius: 10px; background: rgba(255, 107, 122, 0.08); line-height: 1.6; }
 
 /* file:// 仅用于看样式；提示放在输入框前，确保用户无需滚动就能知道正确启动方式。 */

@@ -123,6 +123,18 @@
                 </div>
                 <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
                 <ol id="stage-list" class="stage-list"></ol>
+
+                <!--
+                    这里展示 Spring AI ChatClient.stream() 返回的原始增量内容。
+                    使用 pre.textContent 追加而不是 innerHTML，模型即使输出标签也只会显示为文本。
+                -->
+                <section id="ai-stream" class="ai-stream" aria-label="AI 实时复核" hidden>
+                    <header>
+                        <strong>AI 实时复核</strong>
+                        <span id="ai-stream-provider">等待模型响应</span>
+                    </header>
+                    <pre id="ai-stream-content"></pre>
+                </section>
             </div>
 
             <article id="report-view" class="report-view" aria-live="polite" hidden></article>

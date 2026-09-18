@@ -1,6 +1,7 @@
 package com.enterprise.opsassistant.api;
 
 import com.enterprise.opsassistant.agent.SupervisorAgent;
+import com.enterprise.opsassistant.ai.AiReviewStreamEvent;
 import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
 import com.enterprise.opsassistant.domain.IncidentReport;
 import com.enterprise.opsassistant.exception.AnalysisExecutionException;
@@ -22,6 +23,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -101,6 +103,7 @@ public class AlertAnalysisController {
      * <p>接口立即返回 SseEmitter，真正的分析在线程池中进行。事件名称固定为：</p>
      * <ul>
      *     <li>{@code progress}：AnalysisProgressEvent，可更新前端进度条；</li>
+     *     <li>{@code ai-token}：AiReviewStreamEvent，展示 Spring AI 实时生成内容；</li>
      *     <li>{@code report}：IncidentReport，表示分析成功结束；</li>
      *     <li>{@code error}：StreamErrorEvent，表示连接建立后的分析失败。</li>
      * </ul>
@@ -144,11 +147,13 @@ public class AlertAnalysisController {
                                       SseEmitter emitter,
                                       AtomicBoolean clientConnected,
                                       AtomicReference<String> analysisId) {
+        AtomicLong aiEventSequence = new AtomicLong();
         try {
             IncidentReport report = supervisorAgent.analyze(alertText, conversationId, event -> {
                 analysisId.compareAndSet(null, event.analysisId());
                 sendProgress(emitter, clientConnected, event);
-            });
+            }, event -> sendAiStreamEvent(
+                    emitter, clientConnected, aiEventSequence.incrementAndGet(), event));
             sendEvent(emitter, clientConnected, "report", report.analysisId(), report);
             completeIfConnected(emitter, clientConnected);
         } catch (InvalidAlertException exception) {
@@ -170,6 +175,20 @@ public class AlertAnalysisController {
                               AnalysisProgressEvent event) {
         sendEvent(emitter, clientConnected, "progress",
                 event.analysisId() + ":" + event.stage(), event);
+    }
+
+    /**
+     * 把 Spring AI token 事件发送到独立频道。
+     *
+     * <p>事件 ID 使用 Controller 级单调序号，而不是模型片段自己的 sequence。模型 sequence 在
+     * 重试或切换 Provider 时会从零开始；SSE ID 必须始终唯一，浏览器和网关才能正确识别事件。</p>
+     */
+    private void sendAiStreamEvent(SseEmitter emitter,
+                                   AtomicBoolean clientConnected,
+                                   long eventSequence,
+                                   AiReviewStreamEvent event) {
+        sendEvent(emitter, clientConnected, "ai-token",
+                event.analysisId() + ":ai:" + eventSequence, event);
     }
 
     /** 发送安全错误事件并关闭 SSE 连接。 */

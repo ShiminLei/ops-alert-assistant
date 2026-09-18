@@ -45,6 +45,9 @@
         progressPercent: document.querySelector("#progress-percent"),
         progressBar: document.querySelector("#progress-bar"),
         stageList: document.querySelector("#stage-list"),
+        aiStream: document.querySelector("#ai-stream"),
+        aiStreamProvider: document.querySelector("#ai-stream-provider"),
+        aiStreamContent: document.querySelector("#ai-stream-content"),
         reportView: document.querySelector("#report-view"),
         errorBanner: document.querySelector("#error-banner")
     };
@@ -100,9 +103,34 @@
         elements.progressMessage.textContent = "正在建立分析任务…";
         elements.progressPercent.textContent = "0%";
         elements.progressBar.style.width = "0%";
+        elements.aiStream.hidden = true;
+        elements.aiStreamProvider.textContent = "等待模型响应";
+        elements.aiStreamContent.textContent = "";
         elements.stageList.querySelectorAll("li").forEach(item => {
             item.classList.remove("active", "complete");
         });
+    }
+
+    /**
+     * 展示 Spring AI 原生流式事件。
+     * START 表示一次全新尝试，可能来自重试或备用模型，因此必须先清空旧片段；DELTA 才追加。
+     */
+    function updateAiStream(event) {
+        const source = `${event.provider || "unknown"} / ${event.model || "unknown"}`;
+        if (event.phase === "START") {
+            elements.aiStream.hidden = false;
+            elements.aiStreamContent.textContent = "";
+            elements.aiStreamProvider.textContent = event.fallbackUsed
+                ? `${source} · 备用模型接管`
+                : `${source} · 正在生成`;
+        } else if (event.phase === "DELTA") {
+            elements.aiStream.hidden = false;
+            // textContent 不会执行模型可能生成的 HTML、脚本或事件属性。
+            elements.aiStreamContent.textContent += event.delta || "";
+            elements.aiStreamContent.scrollTop = elements.aiStreamContent.scrollHeight;
+        } else if (event.phase === "COMPLETE") {
+            elements.aiStreamProvider.textContent = `${source} · 结构化转换完成`;
+        }
     }
 
     /** 根据后端阶段更新进度；未知阶段不会破坏页面，只显示其消息。 */
@@ -203,6 +231,8 @@
         await consumeEventStream(response, (type, data) => {
             if (type === "progress") {
                 updateProgress(data);
+            } else if (type === "ai-token") {
+                updateAiStream(data);
             } else if (type === "report") {
                 receivedReport = true;
                 receiveReport(data);

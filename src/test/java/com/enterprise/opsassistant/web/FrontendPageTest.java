@@ -47,6 +47,9 @@ class FrontendPageTest {
                         "src=\"js/app.js\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString(
                         "id=\"runtime-warning\"")));
+        mockMvc.perform(get("/index.html"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "id=\"ai-stream\"")));
     }
 
     /** 页面依赖的静态文件必须能被同一个 Spring Boot 应用访问。 */

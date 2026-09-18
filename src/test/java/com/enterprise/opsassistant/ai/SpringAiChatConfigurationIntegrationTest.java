@@ -2,6 +2,7 @@ package com.enterprise.opsassistant.ai;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -27,6 +28,9 @@ class SpringAiChatConfigurationIntegrationTest {
         SpringAiProviderClient primary = registry.find("mock-primary").orElseThrow();
         AiReviewStructuredOutput review = primary.chatClient().prompt()
                 .user("请复核一条用于集成测试的运维告警。")
+                // 客户端默认挂载了 Chat Memory Advisor，独立调用时也要明确指定会话边界。
+                .advisors(spec -> spec.param(
+                        ChatMemory.CONVERSATION_ID, "conversation-configuration-integration"))
                 .call()
                 .entity(AiReviewStructuredOutput.class);
 
