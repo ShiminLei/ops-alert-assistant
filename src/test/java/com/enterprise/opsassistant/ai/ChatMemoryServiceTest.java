@@ -1,6 +1,8 @@
 package com.enterprise.opsassistant.ai;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -17,10 +19,10 @@ class ChatMemoryServiceTest {
         memory.rememberExchange("conversation-b", "B 告警", "B 结论");
 
         assertThat(memory.history("conversation-a"))
-                .extracting(AiMessage::content)
+                .extracting(Message::getText)
                 .containsExactly("A 告警", "A 结论");
         assertThat(memory.history("conversation-b"))
-                .extracting(AiMessage::content)
+                .extracting(Message::getText)
                 .containsExactly("B 告警", "B 结论");
         assertThat(memory.history("unknown-conversation")).isEmpty();
     }
@@ -35,10 +37,11 @@ class ChatMemoryServiceTest {
         memory.rememberExchange("conversation-a", "第三轮用户", "第三轮助手");
 
         assertThat(memory.history("conversation-a"))
-                .extracting(AiMessage::role)
-                .containsExactly(AiRole.USER, AiRole.ASSISTANT, AiRole.USER, AiRole.ASSISTANT);
+                .extracting(Message::getMessageType)
+                .containsExactly(MessageType.USER, MessageType.ASSISTANT,
+                        MessageType.USER, MessageType.ASSISTANT);
         assertThat(memory.history("conversation-a"))
-                .extracting(AiMessage::content)
+                .extracting(Message::getText)
                 .containsExactly("第二轮用户", "第二轮助手", "第三轮用户", "第三轮助手");
     }
 

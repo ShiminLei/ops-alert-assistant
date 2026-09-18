@@ -1,6 +1,9 @@
 package com.enterprise.opsassistant.ai;
 
 import com.enterprise.opsassistant.config.OpsAssistantAiProperties;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -24,7 +27,7 @@ import java.util.concurrent.ConcurrentMap;
 @Service
 public class ChatMemoryService {
 
-    private final ConcurrentMap<String, Deque<AiMessage>> conversations = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Deque<Message>> conversations = new ConcurrentHashMap<>();
     private final int maxHistoryMessages;
 
     /** 从 AI 配置中读取每个会话最多保留的历史消息数。 */
@@ -46,8 +49,8 @@ public class ChatMemoryService {
      * 返回指定会话的不可变快照。
      * 未知会话返回空列表，不会因一次读取创建空会话。
      */
-    public List<AiMessage> history(String conversationId) {
-        Deque<AiMessage> messages = conversations.get(conversationId);
+    public List<Message> history(String conversationId) {
+        Deque<Message> messages = conversations.get(conversationId);
         if (messages == null) {
             return List.of();
         }
@@ -59,9 +62,10 @@ public class ChatMemoryService {
     /** 将一轮用户输入和模型回复原子地追加到会话，然后从最旧消息开始裁剪。 */
     public void rememberExchange(String conversationId, String userContent, String assistantContent) {
         requireText(conversationId, "conversationId");
-        AiMessage userMessage = new AiMessage(AiRole.USER, userContent);
-        AiMessage assistantMessage = new AiMessage(AiRole.ASSISTANT, assistantContent);
-        Deque<AiMessage> messages = conversations.computeIfAbsent(
+        Message userMessage = new UserMessage(requireText(userContent, "userContent"));
+        Message assistantMessage = new AssistantMessage(
+                requireText(assistantContent, "assistantContent"));
+        Deque<Message> messages = conversations.computeIfAbsent(
                 conversationId,
                 ignored -> new ArrayDeque<>()
         );

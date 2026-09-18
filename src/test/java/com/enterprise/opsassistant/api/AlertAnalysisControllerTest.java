@@ -1,7 +1,5 @@
 package com.enterprise.opsassistant.api;
 
-import com.enterprise.opsassistant.ai.AiMessage;
-import com.enterprise.opsassistant.ai.AiRole;
 import com.enterprise.opsassistant.ai.ChatMemoryService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,6 +9,8 @@ import org.springframework.boot.test.autoconfigure.actuate.observability.AutoCon
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -113,8 +113,9 @@ class AlertAnalysisControllerTest {
                 .andExpect(jsonPath("$.conversationId").value(conversationId));
 
         assertThat(chatMemory.history(conversationId))
-                .extracting(AiMessage::role)
-                .containsExactly(AiRole.USER, AiRole.ASSISTANT, AiRole.USER, AiRole.ASSISTANT);
+                .extracting(Message::getMessageType)
+                .containsExactly(MessageType.USER, MessageType.ASSISTANT,
+                        MessageType.USER, MessageType.ASSISTANT);
     }
 
     /** 空告警应在进入 SupervisorAgent 前被校验，并返回统一 400 错误结构。 */

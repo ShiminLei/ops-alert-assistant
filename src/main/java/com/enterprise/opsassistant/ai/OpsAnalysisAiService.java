@@ -9,9 +9,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -92,14 +90,14 @@ public class OpsAnalysisAiService {
             return AiReviewResult.ruleOnly("AI 上下文构建失败，保留 Java 规则分析结果", false);
         }
 
-        List<AiMessage> messages = new ArrayList<>();
+        List<Message> messages = new ArrayList<>();
         // 固定系统提示词由 ChatClient 配置统一添加；这里仅传入不可信历史数据与当前证据。
         messages.addAll(chatMemory.history(conversationId));
-        messages.add(new AiMessage(AiRole.USER, userPrompt));
+        messages.add(new UserMessage(userPrompt));
 
         try {
             SpringAiRoutingResult<AiReviewStructuredOutput> routing = router.callWithFallback(
-                    toSpringAiMessages(messages), AiReviewStructuredOutput.class);
+                    messages, AiReviewStructuredOutput.class);
             AiReviewResult result = new AiReviewResult(
                     routing.body().toNarrative(),
                     routing.provider(),
@@ -120,24 +118,6 @@ public class OpsAnalysisAiService {
             return result;
         }
     }
-
-    /**
-     * 把迁移前的自定义消息类型转换成 Spring AI 原生 Message。
-     *
-     * <p>历史消息的角色必须保留：用户消息与助手消息如果混淆，模型会错误理解是谁给出的结论。
-     * SYSTEM 分支用于兼容已有数据；正常请求的系统提示词由 ChatClient 默认配置负责。</p>
-     */
-    private List<Message> toSpringAiMessages(List<AiMessage> messages) {
-        return messages.stream()
-                .map(message -> switch (message.role()) {
-                    case SYSTEM -> new SystemMessage(message.content());
-                    case USER -> new UserMessage(message.content());
-                    case ASSISTANT -> new AssistantMessage(message.content());
-                })
-                .map(Message.class::cast)
-                .toList();
-    }
-
 
     /**
      * 保存适合后续追问的简要上下文，而不是重复存入全部工具 JSON，控制后续模型的 Token 消耗。
