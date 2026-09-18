@@ -67,6 +67,16 @@ class FrontendPageTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString(
                         "/api/v1/alerts/analyze/stream")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString(
-                        "updateReportSection")));
+                        "updateReportSection")))
+                // MockMvc 对没有 charset 参数的 JavaScript 响应可能按 ISO-8859-1 解码，
+                // 因此这里验证稳定的 ASCII 结构标记；中文文案由真实浏览器端到端测试覆盖。
+                // reasoning-list 代表最终报告确实包含“分析推理与 AI 复核”区块。
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "reasoning-list")))
+                // ActionUrgency 的两个枚举分支必须都进入前端映射表，不能直接回显原始值。
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "SHORT_TERM:")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "OBSERVATION:")));
     }
 }

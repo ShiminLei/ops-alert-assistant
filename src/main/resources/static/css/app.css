@@ -354,13 +354,18 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56, 232
 .data-card p { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.55; }
 .confidence { color: var(--accent); }
 
-.action-list, .observation-list { padding: 0; margin: 0; list-style: none; }
+.action-list, .reasoning-list, .observation-list { padding: 0; margin: 0; list-style: none; }
 .action-list li { display: grid; grid-template-columns: 32px 1fr auto; align-items: start; gap: 0.8rem; padding: 0.9rem 0; border-bottom: 1px solid var(--line); }
 .action-list li:last-child { border-bottom: 0; }
 .action-order { width: 28px; height: 28px; display: grid; place-items: center; color: var(--accent); border: 1px solid rgba(56, 232, 176, 0.3); border-radius: 7px; font: 600 0.75rem ui-monospace, monospace; }
 .action-copy strong { margin-bottom: 0.25rem; display: block; font-size: 0.9rem; }
 .action-copy span, .action-owner { color: var(--muted); font-size: 0.76rem; }
 .urgency-immediate { color: var(--high) !important; }
+
+/* 推理步骤使用比动作更紧凑的时间线样式，长 AI 复核文本可以自然换行且不会撑宽页面。 */
+.reasoning-list { display: grid; gap: 0.6rem; }
+.reasoning-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 0.75rem; align-items: start; color: #b6cbd5; line-height: 1.65; }
+.reasoning-order { width: 26px; height: 26px; display: grid; place-items: center; color: var(--accent); border: 1px solid rgba(56, 232, 176, 0.24); border-radius: 50%; font: 600 0.7rem ui-monospace, monospace; }
 
 .observation-list { display: flex; flex-wrap: wrap; gap: 0.55rem; }
 .observation-list li { padding: 0.48rem 0.65rem; color: #b6cbd5; border: 1px solid var(--line); border-radius: 7px; font-size: 0.8rem; }

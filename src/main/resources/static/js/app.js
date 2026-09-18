@@ -411,7 +411,16 @@
     }
 
     function urgencyLabel(urgency) {
-        return {IMMEDIATE: "立即", HIGH: "高", MEDIUM: "中", LOW: "低"}[urgency] || urgency || "-";
+        // ActionUrgency 的正式枚举是 IMMEDIATE、SHORT_TERM、OBSERVATION。
+        // 额外保留 HIGH/MEDIUM/LOW 映射，是为了兼容早期报告数据，但新报告不再向用户显示枚举原文。
+        return {
+            IMMEDIATE: "立即",
+            SHORT_TERM: "短期处理",
+            OBSERVATION: "持续观察",
+            HIGH: "高",
+            MEDIUM: "中",
+            LOW: "低"
+        }[urgency] || urgency || "-";
     }
 
     /**
@@ -458,6 +467,16 @@
         const observations = safeList(report.followUpMetrics)
             .map(metric => `<li>${escapeHtml(metric)}</li>`).join("");
 
+        // 根因推理中既包含 Java 规则的证据链，也包含通过结构化转换后的 AI 复核内容。
+        // 将它单独展示，用户才能看见“为什么得出结论”，而不只是看到最终根因和动作。
+        const reasoning = safeList(rootCause.reasoning)
+            .map((item, index) => `
+                <li>
+                    <span class="reasoning-order">${index + 1}</span>
+                    <span>${escapeHtml(item)}</span>
+                </li>`).join("")
+            || '<li><span class="reasoning-order">-</span><span>当前报告没有补充推理说明。</span></li>';
+
         return `
             <section class="report-summary">
                 <div>
@@ -476,6 +495,7 @@
             <section class="report-section"><h3>异常指标</h3><div class="metric-grid">${metrics}</div></section>
             <section class="report-section"><h3>运维工具证据</h3><div class="evidence-grid">${evidence}</div></section>
             <section class="report-section"><h3>根因候选</h3><div class="cause-grid">${causes}</div></section>
+            <section class="report-section"><h3>分析推理与 AI 复核</h3><ol class="reasoning-list">${reasoning}</ol></section>
             <section class="report-section"><h3>建议处置动作</h3><ol class="action-list">${actions}</ol></section>
             <section class="report-section"><h3>后续观察指标</h3><ul class="observation-list">${observations}</ul></section>`;
     }
