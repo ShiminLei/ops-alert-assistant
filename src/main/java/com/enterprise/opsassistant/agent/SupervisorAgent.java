@@ -1,5 +1,7 @@
 package com.enterprise.opsassistant.agent;
 
+import com.enterprise.opsassistant.ai.AiReviewResult;
+import com.enterprise.opsassistant.ai.OpsAnalysisAiService;
 import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
 import com.enterprise.opsassistant.domain.AnalysisStage;
 import com.enterprise.opsassistant.domain.IncidentReport;
@@ -8,6 +10,7 @@ import com.enterprise.opsassistant.exception.InvalidAlertException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -30,27 +33,39 @@ public class SupervisorAgent {
 
     private static final Logger log = LoggerFactory.getLogger(SupervisorAgent.class);
 
-    /** 当前尚未连接外部模型，报告明确标记为确定性规则引擎，不能伪装成 AI 模型结果。 */
-    private static final String RULE_PROVIDER = "rule-engine";
-    private static final String RULE_MODEL = "deterministic-safety-model-v1";
-
     private final AlertParserAgent alertParserAgent;
     private final ToolPlanningAgent toolPlanningAgent;
     private final EvidenceCollectorAgent evidenceCollectorAgent;
     private final RootCauseAgent rootCauseAgent;
     private final ResponsePlanAgent responsePlanAgent;
+    private final OpsAnalysisAiService opsAnalysisAiService;
 
-    /** 所有专业 Agent 都通过构造器注入，使依赖明确且便于单元测试替换。 */
+    /** 所有专业 Agent 和 AI Service 都通过构造器注入，使依赖明确且便于测试替换。 */
+    @Autowired
     public SupervisorAgent(AlertParserAgent alertParserAgent,
                            ToolPlanningAgent toolPlanningAgent,
                            EvidenceCollectorAgent evidenceCollectorAgent,
                            RootCauseAgent rootCauseAgent,
-                           ResponsePlanAgent responsePlanAgent) {
+                           ResponsePlanAgent responsePlanAgent,
+                           OpsAnalysisAiService opsAnalysisAiService) {
         this.alertParserAgent = alertParserAgent;
         this.toolPlanningAgent = toolPlanningAgent;
         this.evidenceCollectorAgent = evidenceCollectorAgent;
         this.rootCauseAgent = rootCauseAgent;
         this.responsePlanAgent = responsePlanAgent;
+        this.opsAnalysisAiService = opsAnalysisAiService;
+    }
+
+    /**
+     * 规则 Agent 单元测试使用的便捷构造器。它显式关闭 AI，不会创建隐藏网络依赖。
+     */
+    public SupervisorAgent(AlertParserAgent alertParserAgent,
+                           ToolPlanningAgent toolPlanningAgent,
+                           EvidenceCollectorAgent evidenceCollectorAgent,
+                           RootCauseAgent rootCauseAgent,
+                           ResponsePlanAgent responsePlanAgent) {
+        this(alertParserAgent, toolPlanningAgent, evidenceCollectorAgent,
+                rootCauseAgent, responsePlanAgent, OpsAnalysisAiService.ruleOnly());
     }
 
     /**
@@ -102,17 +117,30 @@ public class SupervisorAgent {
                         "已完成根因候选和最终风险判断");
 
                 var responsePlan = responsePlanAgent.plan(recognition, rootCause, evidenceCollection);
+                AiReviewResult aiReview = opsAnalysisAiService.review(
+                        analysisId,
+                        rawAlert,
+                        recognition,
+                        evidenceCollection,
+                        rootCause,
+                        responsePlan
+                );
+                var reviewedRootCause = appendAiReview(rootCause, aiReview);
+                emit(safeObserver, analysisId, AnalysisStage.AI_REVIEWED,
+                        aiReview.ruleOnly()
+                                ? "AI 模型不可用或未启用，保留规则分析结果"
+                                : "AI 模型已完成证据复核");
                 IncidentReport report = new IncidentReport(
                         analysisId,
                         rawAlert.trim(),
                         recognition,
                         evidenceCollection.evidence(),
-                        rootCause,
+                        reviewedRootCause,
                         responsePlan.actions(),
                         responsePlan.followUpMetrics(),
-                        RULE_PROVIDER,
-                        RULE_MODEL,
-                        false,
+                        aiReview.provider(),
+                        aiReview.model(),
+                        aiReview.fallbackUsed(),
                         Instant.now()
                 );
                 emit(safeObserver, analysisId, AnalysisStage.REPORT_GENERATED,
@@ -122,7 +150,7 @@ public class SupervisorAgent {
                 log.info("告警分析完成: analysisId={}, service={}, risk={}, evidence={}, actions={}",
                         analysisId,
                         recognition.serviceName(),
-                        rootCause.finalRisk(),
+                        reviewedRootCause.finalRisk(),
                         evidenceCollection.evidence().size(),
                         responsePlan.actions().size());
                 return report;
@@ -140,6 +168,28 @@ public class SupervisorAgent {
                 );
             }
         }
+    }
+
+    /**
+     * 只把 AI 文本追加到推理说明，不允许模型改变 Java 已确定的风险、根因候选和安全决策。
+     */
+    private com.enterprise.opsassistant.domain.RootCauseAssessment appendAiReview(
+            com.enterprise.opsassistant.domain.RootCauseAssessment rootCause,
+            AiReviewResult aiReview) {
+        if (aiReview.ruleOnly()) {
+            return rootCause;
+        }
+        java.util.List<String> reasoning = new java.util.ArrayList<>(rootCause.reasoning());
+        reasoning.add("AI 模型复核（" + aiReview.provider() + "/" + aiReview.model()
+                + "）：" + aiReview.content());
+        return new com.enterprise.opsassistant.domain.RootCauseAssessment(
+                rootCause.finalRisk(),
+                rootCause.candidates(),
+                reasoning,
+                rootCause.rollbackRecommended(),
+                rootCause.escalationRequired(),
+                rootCause.userImpact()
+        );
     }
 
     /**

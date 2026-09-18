@@ -53,7 +53,12 @@ class AlertAnalysisControllerTest {
                 .andExpect(jsonPath("$.rootCause.finalRisk").value("HIGH"))
                 .andExpect(jsonPath("$.rootCause.rollbackRecommended").value(true))
                 .andExpect(jsonPath("$.recommendedActions.length()").isNotEmpty())
-                .andExpect(jsonPath("$.modelProvider").value("rule-engine"));
+                .andExpect(jsonPath("$.modelProvider").value("mock-primary"))
+                .andExpect(jsonPath("$.modelName").value("mock-ops-primary"))
+                .andExpect(jsonPath("$.fallbackUsed").value(false))
+                .andExpect(jsonPath("$.rootCause.reasoning[*]")
+                        .value(org.hamcrest.Matchers.hasItem(
+                                org.hamcrest.Matchers.containsString("AI Mock 复核完成"))));
     }
 
     /** 空告警应在进入 SupervisorAgent 前被校验，并返回统一 400 错误结构。 */
@@ -101,6 +106,7 @@ class AlertAnalysisControllerTest {
         assertThat(stream)
                 .contains("event:progress")
                 .contains("\"stage\":\"RECEIVED\"")
+                .contains("\"stage\":\"AI_REVIEWED\"")
                 .contains("\"stage\":\"COMPLETED\"")
                 .contains("event:report")
                 .contains("\"serviceName\":\"payment-service\"")

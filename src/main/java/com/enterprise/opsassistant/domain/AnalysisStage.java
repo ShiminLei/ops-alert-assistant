@@ -17,6 +17,8 @@ public enum AnalysisStage {
     EVIDENCE_COLLECTED,
     /** 已基于证据生成根因候选和风险判断。 */
     ROOT_CAUSE_ANALYZED,
+    /** 主模型或备用模型已完成基于规则结论的安全复核。 */
+    AI_REVIEWED,
     /** 最终结构化报告和 Markdown 报告已经生成。 */
     REPORT_GENERATED,
     /** 整条分析链路正常完成。 */

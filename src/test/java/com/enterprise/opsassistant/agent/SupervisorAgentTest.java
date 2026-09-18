@@ -74,6 +74,7 @@ class SupervisorAgentTest {
                 AnalysisStage.TOOLS_PLANNED,
                 AnalysisStage.EVIDENCE_COLLECTED,
                 AnalysisStage.ROOT_CAUSE_ANALYZED,
+                AnalysisStage.AI_REVIEWED,
                 AnalysisStage.REPORT_GENERATED,
                 AnalysisStage.COMPLETED
         );
