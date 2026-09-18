@@ -1,11 +1,16 @@
 package com.enterprise.opsassistant.agent;
 
+import com.enterprise.opsassistant.ai.AlertUnderstandingAiService;
+import com.enterprise.opsassistant.ai.AlertUnderstandingStructuredOutput;
+import com.enterprise.opsassistant.catalog.InMemoryServiceCatalog;
+import com.enterprise.opsassistant.catalog.ServiceCatalog;
 import com.enterprise.opsassistant.domain.AlertRecognition;
 import com.enterprise.opsassistant.domain.AlertType;
 import com.enterprise.opsassistant.domain.MetricObservation;
 import com.enterprise.opsassistant.domain.MetricTrend;
 import com.enterprise.opsassistant.domain.RiskLevel;
 import com.enterprise.opsassistant.exception.InvalidAlertException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -14,16 +19,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 把自然语言告警转换成 {@link AlertRecognition} 的规则型解析 Agent。
+ * 把自然语言告警转换成 {@link AlertRecognition} 的 AI 增强解析 Agent。
  *
  * <p>用户不会严格按照 JSON 模板描述事故，常见输入可能是“支付刚上线新版本后大量超时，
- * 错误率 18.7%”。本类负责完成第一轮确定性解析：识别服务、故障类型、显式指标、风险和
- * 用户影响。后续接入真正的 AI Service 后，模型可以覆盖更多表达方式，但该规则层仍作为
- * 无模型环境和模型输出异常时的安全兜底。</p>
+ * 错误率 18.7%”。本类会先用 Java 规则形成一份确定性基线，再通过 Spring AI Structured
+ * Output 理解更灵活的表达，最后对两份结果做安全合并。模型不可用、JSON 无法转换或指标
+ * 没有出现在原文中时，都会保留规则基线，因此 AI 增强不会降低系统的可用性和安全下限。</p>
  *
  * <p>这里故意不查询任何运维工具。告警解析只理解用户提供的信息，不能提前把 Mock 数据
  * 当作用户输入，否则会造成“尚未调查就已经知道根因”的数据泄漏。</p>
@@ -31,11 +37,8 @@ import java.util.regex.Pattern;
 @Component
 public class AlertParserAgent {
 
-    /** 匹配英文服务标准名，例如 payment-service 或 risk-engine-service。 */
-    private static final Pattern ENGLISH_SERVICE_PATTERN = Pattern.compile(
-            "\\b([a-z][a-z0-9-]{1,62}-service)\\b",
-            Pattern.CASE_INSENSITIVE
-    );
+    /** 用于检查 AI 指标值是否真的出现在用户原文中，避免模型凭常识补造监控数据。 */
+    private static final Pattern NUMBER_PATTERN = Pattern.compile("\\d+(?:\\.\\d+)?");
 
     /**
      * 指标正则允许“CPU 90%”“CPU使用率：90%”等常见写法。
@@ -49,8 +52,32 @@ public class AlertParserAgent {
             Pattern.CASE_INSENSITIVE
     );
 
-    /** 中文口语服务名到系统标准服务名的映射，按插入顺序匹配更明确的别名。 */
-    private static final Map<String, String> SERVICE_ALIASES = serviceAliases();
+    private final AlertUnderstandingAiService alertUnderstandingAiService;
+    private final ServiceCatalog serviceCatalog;
+
+    /** Spring 运行时注入真正经过 ChatClient 和主备路由的告警理解 AI Service。 */
+    @Autowired
+    public AlertParserAgent(AlertUnderstandingAiService alertUnderstandingAiService,
+                            ServiceCatalog serviceCatalog) {
+        this.alertUnderstandingAiService = alertUnderstandingAiService;
+        this.serviceCatalog = serviceCatalog;
+    }
+
+    /**
+     * 规则 Agent 单元测试和离线领域测试使用的构造器。
+     *
+     * <p>显式保留无参构造器不是绕开生产 AI：Spring 会优先使用上面的注入构造器；只有手工
+     * {@code new AlertParserAgent()} 时才进入纯规则模式，使领域规则测试不依赖模型或网络。</p>
+     */
+    public AlertParserAgent() {
+        this.alertUnderstandingAiService = null;
+        this.serviceCatalog = new InMemoryServiceCatalog();
+    }
+
+    /** 单元测试可注入可控 AI Service，同时复用与生产相同的内存服务目录。 */
+    AlertParserAgent(AlertUnderstandingAiService alertUnderstandingAiService) {
+        this(alertUnderstandingAiService, new InMemoryServiceCatalog());
+    }
 
     /**
      * 解析一段原始告警文本。
@@ -60,7 +87,37 @@ public class AlertParserAgent {
      * @throws InvalidAlertException 输入为空时抛出，避免生成没有审计价值的分析任务
      */
     public AlertRecognition parse(String rawAlert) {
+        return parse(rawAlert, null);
+    }
+
+    /**
+     * 在指定分析会话中解析告警。
+     *
+     * <p>先计算 Java 基线，再调用 AI；这种顺序确保模型失败时仍然有完整结果，也为后续合并
+     * 提供风险下限和原文指标依据。conversationId 为空表示显式使用离线规则模式。</p>
+     *
+     * @param rawAlert 用户输入的自然语言告警
+     * @param conversationId 当前分析会话编号，由 SupervisorAgent 创建并贯穿整个调用链
+     * @return 通过 Java 安全边界校验后的最终识别结果
+     */
+    public AlertRecognition parse(String rawAlert, String conversationId) {
         String alert = normalize(rawAlert);
+        AlertRecognition ruleBaseline = parseWithRules(alert);
+        if (alertUnderstandingAiService == null
+                || conversationId == null
+                || conversationId.isBlank()) {
+            return ruleBaseline;
+        }
+
+        Optional<AlertUnderstandingStructuredOutput> aiCandidate =
+                alertUnderstandingAiService.understand(conversationId, alert);
+        return aiCandidate
+                .map(candidate -> mergeAiCandidate(alert, ruleBaseline, candidate))
+                .orElse(ruleBaseline);
+    }
+
+    /** 旧规则解析被完整保留为可预测基线，而不是在接入模型后被删除。 */
+    private AlertRecognition parseWithRules(String alert) {
         String lowerCaseAlert = alert.toLowerCase(Locale.ROOT);
         String serviceName = recognizeService(lowerCaseAlert);
         AlertType alertType = recognizeAlertType(lowerCaseAlert);
@@ -81,6 +138,135 @@ public class AlertParserAgent {
         );
     }
 
+    /**
+     * 合并 AI 候选与规则基线，并执行不可交给模型的安全约束。
+     *
+     * <ul>
+     *     <li>服务名必须满足安全格式；AI 无法判断时保留规则识别结果。</li>
+     *     <li>AI 指标数值必须能在原始文本中找到，且只接受项目支持的核心指标。</li>
+     *     <li>最终初始风险取 AI 与规则中的较高值，模型不能降低规则风险。</li>
+     *     <li>用户影响和升级建议使用 OR 合并，避免模型抹掉明确的危险信号。</li>
+     * </ul>
+     */
+    private AlertRecognition mergeAiCandidate(
+            String rawAlert,
+            AlertRecognition baseline,
+            AlertUnderstandingStructuredOutput candidate) {
+        String aiServiceName = candidate.serviceName().toLowerCase(Locale.ROOT);
+        String serviceName = serviceCatalog.contains(aiServiceName)
+                ? aiServiceName
+                : baseline.serviceName();
+
+        AlertType alertType = candidate.alertType() == AlertType.UNKNOWN
+                ? baseline.alertType()
+                : candidate.alertType();
+        List<MetricObservation> metrics = mergeMetrics(
+                rawAlert, baseline.abnormalMetrics(), candidate.abnormalMetrics());
+        RiskLevel initialRisk = RiskLevel.max(
+                baseline.initialRisk(), candidate.initialRisk());
+        boolean userImpact = baseline.userImpact() || candidate.userImpact();
+        boolean escalationSuggested = baseline.escalationSuggested()
+                || candidate.escalationSuggested()
+                || (initialRisk.atLeast(RiskLevel.HIGH) && userImpact);
+
+        return new AlertRecognition(
+                serviceName,
+                alertType,
+                metrics,
+                initialRisk,
+                userImpact,
+                escalationSuggested,
+                candidate.summary()
+        );
+    }
+
+    /**
+     * 将通过真实性校验的 AI 指标合入规则指标，同名指标以 AI 的语义趋势为准。
+     * 规则已经识别到的指标永远不会因为模型漏字段而消失。
+     */
+    private List<MetricObservation> mergeMetrics(
+            String rawAlert,
+            List<MetricObservation> baselineMetrics,
+            List<AlertUnderstandingStructuredOutput.MetricCandidate> aiMetrics) {
+        Map<String, MetricObservation> merged = new LinkedHashMap<>();
+        baselineMetrics.forEach(metric -> merged.put(metric.metricName(), metric));
+        for (AlertUnderstandingStructuredOutput.MetricCandidate candidate : aiMetrics) {
+            toVerifiedMetric(rawAlert, candidate)
+                    .ifPresent(metric -> merged.put(metric.metricName(), metric));
+        }
+        return List.copyOf(merged.values());
+    }
+
+    /**
+     * 校验并规范化单个 AI 指标。
+     *
+     * <p>阈值和标准单位由 Java 决定，不采信模型提供的阈值。P99 如果以秒返回会统一换算为
+     * 毫秒；非有限数、未知指标或原文中找不到对应数值时直接拒绝。</p>
+     */
+    private Optional<MetricObservation> toVerifiedMetric(
+            String rawAlert,
+            AlertUnderstandingStructuredOutput.MetricCandidate candidate) {
+        if (!Double.isFinite(candidate.currentValue())) {
+            return Optional.empty();
+        }
+
+        String metricName = candidate.metricName().trim();
+        double value = candidate.currentValue();
+        String unit;
+        double threshold;
+        if ("cpuUsage".equals(metricName)) {
+            unit = "%";
+            threshold = 80.0;
+        } else if ("memoryUsage".equals(metricName)) {
+            unit = "%";
+            threshold = 85.0;
+        } else if ("errorRate".equals(metricName)) {
+            unit = "%";
+            threshold = 5.0;
+        } else if ("p99Latency".equals(metricName)) {
+            unit = "ms";
+            threshold = 1000.0;
+            if ("s".equalsIgnoreCase(candidate.unit()) || "秒".equals(candidate.unit())) {
+                value *= 1000.0;
+            }
+        } else {
+            return Optional.empty();
+        }
+
+        if (!sourceContainsMetricValue(rawAlert, candidate.currentValue(), value)) {
+            return Optional.empty();
+        }
+        return Optional.of(new MetricObservation(
+                metricName,
+                value,
+                unit,
+                threshold,
+                candidate.trend(),
+                Instant.now()
+        ));
+    }
+
+    /**
+     * 检查原文中的任意数字是否与 AI 原值或规范化后的值一致。
+     * 比较时允许极小浮点误差，并支持“2.45 秒”转换为“2450 毫秒”的情况。
+     */
+    private boolean sourceContainsMetricValue(String rawAlert, double sourceValue, double normalizedValue) {
+        Matcher matcher = NUMBER_PATTERN.matcher(rawAlert);
+        while (matcher.find()) {
+            double textValue = Double.parseDouble(matcher.group());
+            if (approximatelyEqual(textValue, sourceValue)
+                    || approximatelyEqual(textValue, normalizedValue)
+                    || approximatelyEqual(textValue * 1000.0, normalizedValue)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean approximatelyEqual(double first, double second) {
+        return Math.abs(first - second) < 0.000_001;
+    }
+
     /** 去掉首尾空白并合并连续空白，使正则不受换行或多余空格影响。 */
     private String normalize(String rawAlert) {
         if (rawAlert == null || rawAlert.isBlank()) {
@@ -94,15 +280,9 @@ public class AlertParserAgent {
      * 未识别时返回明确的 unknown-service，让后续工具产生 PARTIAL 证据而不是猜测服务。
      */
     private String recognizeService(String alert) {
-        Matcher englishService = ENGLISH_SERVICE_PATTERN.matcher(alert);
-        if (englishService.find()) {
-            return englishService.group(1).toLowerCase(Locale.ROOT);
-        }
-
-        return SERVICE_ALIASES.entrySet().stream()
-                .filter(entry -> alert.contains(entry.getKey()))
-                .map(Map.Entry::getValue)
-                .findFirst()
+        // 先由统一目录匹配标准名和别名，避免 Agent 与 CMDB/Mock 数据各自维护一份服务清单。
+        return serviceCatalog.resolveFromText(alert)
+                .map(ServiceCatalog.ServiceDefinition::canonicalName)
                 .orElse("unknown-service");
     }
 
@@ -274,16 +454,4 @@ public class AlertParserAgent {
         );
     }
 
-    /** 使用 LinkedHashMap 保证“支付服务”等更具体的别名优先于较短说法。 */
-    private static Map<String, String> serviceAliases() {
-        Map<String, String> aliases = new LinkedHashMap<>();
-        aliases.put("支付服务", "payment-service");
-        aliases.put("支付接口", "payment-service");
-        aliases.put("支付系统", "payment-service");
-        aliases.put("订单服务", "order-service");
-        aliases.put("订单系统", "order-service");
-        aliases.put("风控服务", "risk-engine");
-        aliases.put("库存服务", "inventory-service");
-        return Map.copyOf(aliases);
-    }
 }

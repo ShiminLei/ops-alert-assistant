@@ -22,7 +22,7 @@ import java.util.List;
  */
 public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel {
 
-    private static final String JSON = """
+    private static final String REVIEW_JSON = """
             {
               "evidenceConsistency": "AI Mock 复核完成：告警和工具证据已进入 Spring AI 结构化复核链路",
               "mostLikelyRootCause": "以 Java 规则引擎和工具证据确定的根因候选为准",
@@ -32,12 +32,31 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
             """;
 
     /**
+     * 告警理解阶段的确定性响应。
+     *
+     * <p>Mock 模型不伪造语义推理，因此返回安全的未知值；AlertParserAgent 会将其与 Java
+     * 基线合并。这个响应的作用是验证告警理解确实经过 ChatClient、主备路由和 Structured
+     * Output，而不是让本地演示假装拥有真实大模型的理解能力。</p>
+     */
+    private static final String ALERT_UNDERSTANDING_JSON = """
+            {
+              "serviceName": "unknown-service",
+              "alertType": "UNKNOWN",
+              "abnormalMetrics": [],
+              "initialRisk": "LOW",
+              "userImpact": false,
+              "escalationSuggested": false,
+              "summary": "本地 Mock 已完成 Spring AI 告警理解，业务字段由 Java 安全基线补齐"
+            }
+            """;
+
+    /**
      * 返回符合 {@link AiReviewStructuredOutput} 字段结构的 JSON。
      * Spring AI 的结构化输出转换器会把该 JSON 反序列化成 Java record。
      */
     @Override
     public ChatResponse call(Prompt prompt) {
-        AssistantMessage message = new AssistantMessage(JSON);
+        AssistantMessage message = new AssistantMessage(responseFor(prompt));
         return new ChatResponse(List.of(new Generation(message)));
     }
 
@@ -50,13 +69,24 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
      */
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
-        int firstBoundary = JSON.length() / 3;
+        String json = responseFor(prompt);
+        int firstBoundary = json.length() / 3;
         int secondBoundary = firstBoundary * 2;
         return Flux.just(
-                responseChunk(JSON.substring(0, firstBoundary)),
-                responseChunk(JSON.substring(firstBoundary, secondBoundary)),
-                responseChunk(JSON.substring(secondBoundary))
+                responseChunk(json.substring(0, firstBoundary)),
+                responseChunk(json.substring(firstBoundary, secondBoundary)),
+                responseChunk(json.substring(secondBoundary))
         );
+    }
+
+    /** 根据提示词中的稳定任务标记选择对应的结构化 Mock 响应。 */
+    private String responseFor(Prompt prompt) {
+        // 只检查本次调用最后一条用户消息，不能扫描整个 Prompt。连续追问时 Prompt 还包含历史
+        // 阶段消息，扫描全部内容会让后续 AI 复核误命中上一轮的告警理解任务标记。
+        String currentRequest = prompt.getLastUserOrToolResponseMessage().getText();
+        return currentRequest.contains("[TASK:ALERT_UNDERSTANDING]")
+                ? ALERT_UNDERSTANDING_JSON
+                : REVIEW_JSON;
     }
 
     private ChatResponse responseChunk(String content) {

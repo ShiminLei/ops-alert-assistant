@@ -185,7 +185,9 @@ public class SupervisorAgent {
             log.info("告警分析开始: analysisId={}", analysisId);
 
             try {
-                var recognition = alertParserAgent.parse(rawAlert);
+                // 使用同一个 conversationId 调用告警理解 AI，使本轮模型调用具有一致的会话身份。
+                // AlertParserAgent 内部仍会先建立 Java 规则基线，模型失败时不会中断后续工具调查。
+                var recognition = alertParserAgent.parse(rawAlert, effectiveConversationId);
                 emit(safeObserver, analysisId, AnalysisStage.ALERT_RECOGNIZED,
                         "已识别服务、告警类型和初始风险");
                 emitSection(safeSectionObserver, analysisId,
