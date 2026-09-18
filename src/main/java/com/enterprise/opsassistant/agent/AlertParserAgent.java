@@ -5,6 +5,7 @@ import com.enterprise.opsassistant.domain.AlertType;
 import com.enterprise.opsassistant.domain.MetricObservation;
 import com.enterprise.opsassistant.domain.MetricTrend;
 import com.enterprise.opsassistant.domain.RiskLevel;
+import com.enterprise.opsassistant.exception.InvalidAlertException;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -56,7 +57,7 @@ public class AlertParserAgent {
      *
      * @param rawAlert 用户输入的自然语言告警
      * @return 可直接交给工具规划 Agent 的结构化识别结果
-     * @throws IllegalArgumentException 输入为空时抛出，避免生成没有审计价值的分析任务
+     * @throws InvalidAlertException 输入为空时抛出，避免生成没有审计价值的分析任务
      */
     public AlertRecognition parse(String rawAlert) {
         String alert = normalize(rawAlert);
@@ -83,7 +84,7 @@ public class AlertParserAgent {
     /** 去掉首尾空白并合并连续空白，使正则不受换行或多余空格影响。 */
     private String normalize(String rawAlert) {
         if (rawAlert == null || rawAlert.isBlank()) {
-            throw new IllegalArgumentException("alert text must not be blank");
+            throw new InvalidAlertException("alert text must not be blank");
         }
         return rawAlert.trim().replaceAll("\\s+", " ");
     }
