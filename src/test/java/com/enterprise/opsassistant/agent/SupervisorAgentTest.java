@@ -1,6 +1,8 @@
 package com.enterprise.opsassistant.agent;
 
 import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
+import com.enterprise.opsassistant.domain.AnalysisSectionEvent;
+import com.enterprise.opsassistant.domain.AnalysisSectionType;
 import com.enterprise.opsassistant.domain.AnalysisStage;
 import com.enterprise.opsassistant.domain.RiskLevel;
 import com.enterprise.opsassistant.exception.InvalidAlertException;
@@ -104,5 +106,34 @@ class SupervisorAgentTest {
 
         assertThat(report.recognition().serviceName()).isEqualTo("order-service");
         assertThat(report.rootCause().finalRisk()).isEqualTo(RiskLevel.LOW);
+    }
+
+    /**
+     * 报告区段应按业务完成顺序发布，使 SSE 页面可以先显示识别结果，再逐条增加证据和动作。
+     */
+    @Test
+    void shouldPublishIncrementalReportSections() {
+        List<AnalysisSectionEvent> sections = new ArrayList<>();
+
+        var report = supervisor.analyze(
+                "支付服务刚发布后大量请求超时，错误率18.7%，用户支付失败",
+                null,
+                event -> { },
+                event -> { },
+                sections::add);
+
+        assertThat(sections.get(0).section()).isEqualTo(AnalysisSectionType.RECOGNITION);
+        assertThat(sections).filteredOn(event -> event.section() == AnalysisSectionType.EVIDENCE)
+                .hasSameSizeAs(report.evidence());
+        assertThat(sections).filteredOn(event -> event.section() == AnalysisSectionType.ACTION)
+                .hasSameSizeAs(report.recommendedActions());
+        assertThat(sections).extracting(AnalysisSectionEvent::section)
+                .containsSubsequence(
+                        AnalysisSectionType.RECOGNITION,
+                        AnalysisSectionType.EVIDENCE,
+                        AnalysisSectionType.ROOT_CAUSE,
+                        AnalysisSectionType.ACTION,
+                        AnalysisSectionType.AI_REVIEW);
+        assertThat(sections).allMatch(event -> event.analysisId().equals(report.analysisId()));
     }
 }

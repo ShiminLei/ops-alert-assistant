@@ -100,8 +100,9 @@
     function showProgress() {
         clearError();
         elements.emptyState.hidden = true;
-        elements.reportView.hidden = true;
         elements.progressView.hidden = false;
+        initializeLiveReport();
+        elements.reportView.hidden = false;
         elements.downloadReport.hidden = true;
         elements.progressMessage.textContent = "正在建立分析任务…";
         elements.progressPercent.textContent = "0%";
@@ -153,6 +154,89 @@
             item.classList.toggle("complete", index < currentIndex);
             item.classList.toggle("active", index === currentIndex);
         });
+    }
+
+    /**
+     * 为本轮分析创建固定的报告区域。后续 SSE 只填充对应容器，不重建整个页面。
+     * hidden 区段在第一条有效业务数据到达时才显示，避免先出现一排空卡片。
+     */
+    function initializeLiveReport() {
+        elements.reportView.innerHTML = `
+            <div id="live-report-status" class="helper-text">报告内容会随着分析结果逐块出现。</div>
+            <section id="live-recognition" class="report-section" hidden></section>
+            <section id="live-evidence" class="report-section" hidden>
+                <h3>运维工具证据</h3><div id="live-evidence-grid" class="evidence-grid"></div>
+            </section>
+            <section id="live-root-cause" class="report-section" hidden></section>
+            <section id="live-actions" class="report-section" hidden>
+                <h3>建议处置动作</h3><ol id="live-action-list" class="action-list"></ol>
+            </section>
+            <section id="live-ai-review" class="report-section" hidden></section>`;
+    }
+
+    /** 根据区段事件增量填充报告；所有外部文本在进入模板前都经过 escapeHtml。 */
+    function updateReportSection(type, data) {
+        const status = document.querySelector("#live-report-status");
+        if (status) {
+            status.hidden = true;
+        }
+
+        if (type === "recognition") {
+            const section = document.querySelector("#live-recognition");
+            const risk = String(data.initialRisk || "UNKNOWN").toLowerCase();
+            section.innerHTML = `
+                <div class="report-summary">
+                    <div>
+                        <p class="eyebrow">INCIDENT RECOGNIZED</p>
+                        <h3>${escapeHtml(data.serviceName)} · ${escapeHtml(data.alertType)}</h3>
+                        <p>${escapeHtml(data.summary)}</p>
+                    </div>
+                    <span class="risk-badge risk-${escapeHtml(risk)}">${escapeHtml(riskLabel(data.initialRisk))}</span>
+                </div>`;
+            section.hidden = false;
+        } else if (type === "evidence") {
+            const section = document.querySelector("#live-evidence");
+            const grid = document.querySelector("#live-evidence-grid");
+            grid.insertAdjacentHTML("beforeend", `
+                <div class="data-card">
+                    <header><span>${escapeHtml(data.toolName)}</span><span>${escapeHtml(data.status)} · ${escapeHtml(data.durationMs)} ms</span></header>
+                    <strong>${escapeHtml(data.summary)}</strong>
+                    <p>证据编号：${escapeHtml(data.evidenceId)}</p>
+                </div>`);
+            section.hidden = false;
+        } else if (type === "root-cause") {
+            const section = document.querySelector("#live-root-cause");
+            const causes = safeList(data.candidates).map(candidate => `
+                <div class="data-card">
+                    <header><span>候选根因</span><span class="confidence">${Math.round(Number(candidate.confidence || 0) * 100)}%</span></header>
+                    <strong>${escapeHtml(candidate.description)}</strong>
+                    <p>证据：${safeList(candidate.evidenceIds).map(escapeHtml).join("、") || "无"}</p>
+                </div>`).join("");
+            section.innerHTML = `<h3>根因候选 · ${escapeHtml(riskLabel(data.finalRisk))}</h3><div class="cause-grid">${causes}</div>`;
+            section.hidden = false;
+        } else if (type === "action") {
+            const section = document.querySelector("#live-actions");
+            const list = document.querySelector("#live-action-list");
+            list.insertAdjacentHTML("beforeend", `
+                <li>
+                    <span class="action-order">${escapeHtml(data.order)}</span>
+                    <div class="action-copy">
+                        <strong>${escapeHtml(data.action)}</strong>
+                        <span class="${data.urgency === "IMMEDIATE" ? "urgency-immediate" : ""}">紧急程度：${escapeHtml(urgencyLabel(data.urgency))}</span>
+                    </div>
+                    <span class="action-owner">${escapeHtml(data.owner)}</span>
+                </li>`);
+            section.hidden = false;
+        } else if (type === "ai-review") {
+            const section = document.querySelector("#live-ai-review");
+            section.innerHTML = `
+                <h3>AI 证据复核</h3>
+                <div class="data-card">
+                    <header><span>${escapeHtml(data.provider)} / ${escapeHtml(data.model)}</span><span>${data.fallbackUsed ? "备用模型" : "主模型"}</span></header>
+                    <strong>${escapeHtml(data.content)}</strong>
+                </div>`;
+            section.hidden = false;
+        }
     }
 
     /**
@@ -279,6 +363,8 @@
                 updateProgress(data);
             } else if (type === "ai-token") {
                 updateAiStream(data);
+            } else if (["recognition", "evidence", "root-cause", "action", "ai-review"].includes(type)) {
+                updateReportSection(type, data);
             } else if (type === "report") {
                 receivedReport = true;
                 receiveReport(data);

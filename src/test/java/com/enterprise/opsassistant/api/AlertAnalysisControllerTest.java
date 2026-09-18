@@ -201,6 +201,11 @@ class AlertAnalysisControllerTest {
                 .contains("\"phase\":\"COMPLETE\"")
                 .contains("\"chunkSequence\":")
                 .contains("AI Mock 复核完成")
+                .contains("event:recognition")
+                .contains("event:evidence")
+                .contains("event:root-cause")
+                .contains("event:action")
+                .contains("event:ai-review")
                 .contains("event:report")
                 .contains("\"serviceName\":\"payment-service\"")
                 .contains("\"finalRisk\":\"HIGH\"");
@@ -208,6 +213,12 @@ class AlertAnalysisControllerTest {
                 .isLessThan(stream.indexOf("event:report"));
         assertThat(stream.indexOf("\"phase\":\"START\""))
                 .isLessThan(stream.indexOf("\"phase\":\"COMPLETE\""));
+        assertThat(stream.indexOf("event:recognition"))
+                .isLessThan(stream.indexOf("event:evidence"));
+        assertThat(stream.indexOf("event:evidence"))
+                .isLessThan(stream.indexOf("event:root-cause"));
+        assertThat(stream.indexOf("event:root-cause"))
+                .isLessThan(stream.indexOf("event:report"));
 
         // 解析每个 data 行，验证不是只有第一条正确，而是整条连接的 id 与 Run seq 都连续递增。
         List<Long> protocolIds = stream.lines()

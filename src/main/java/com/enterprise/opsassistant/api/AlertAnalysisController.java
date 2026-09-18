@@ -3,6 +3,7 @@ package com.enterprise.opsassistant.api;
 import com.enterprise.opsassistant.agent.SupervisorAgent;
 import com.enterprise.opsassistant.ai.AiReviewStreamEvent;
 import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
+import com.enterprise.opsassistant.domain.AnalysisSectionEvent;
 import com.enterprise.opsassistant.domain.IncidentReport;
 import com.enterprise.opsassistant.exception.AnalysisExecutionException;
 import com.enterprise.opsassistant.exception.InvalidAlertException;
@@ -106,6 +107,7 @@ public class AlertAnalysisController {
      * <ul>
      *     <li>{@code progress}：AnalysisProgressEvent，可更新前端进度条；</li>
      *     <li>{@code ai-token}：AiReviewStreamEvent，展示 Spring AI 实时生成内容；</li>
+     *     <li>{@code recognition/evidence/root-cause/action/ai-review}：逐块报告数据；</li>
      *     <li>{@code report}：IncidentReport，表示分析成功结束；</li>
      *     <li>{@code error}：StreamErrorEvent，表示连接建立后的分析失败。</li>
      * </ul>
@@ -157,7 +159,9 @@ public class AlertAnalysisController {
                 analysisId.compareAndSet(null, event.analysisId());
                 sendProgress(emitter, clientConnected, sequenceContext, event);
             }, event -> sendAiStreamEvent(
-                    emitter, clientConnected, sequenceContext, event));
+                    emitter, clientConnected, sequenceContext, event),
+                    event -> sendAnalysisSectionEvent(
+                            emitter, clientConnected, sequenceContext, event));
             sendEvent(emitter, clientConnected, sequenceContext,
                     report.analysisId(), "report", report);
             completeIfConnected(emitter, clientConnected);
@@ -195,6 +199,18 @@ public class AlertAnalysisController {
                                    AiReviewStreamEvent event) {
         sendEvent(emitter, clientConnected, sequenceContext,
                 event.analysisId(), "ai-token", event);
+    }
+
+    /**
+     * 使用区段自己的稳定协议名发送业务结果，让前端可以按区域增量渲染。
+     * 具体数据仍放在统一信封的 data 字段中，id 和 Run seq 由 sendEvent 集中生成。
+     */
+    private void sendAnalysisSectionEvent(SseEmitter emitter,
+                                          AtomicBoolean clientConnected,
+                                          SseSequenceContext sequenceContext,
+                                          AnalysisSectionEvent event) {
+        sendEvent(emitter, clientConnected, sequenceContext,
+                event.analysisId(), event.section().eventName(), event.data());
     }
 
     /** 发送安全错误事件并关闭 SSE 连接。 */

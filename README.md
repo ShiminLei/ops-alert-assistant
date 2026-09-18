@@ -25,7 +25,9 @@ Structured Output、Chat Memory、Resilience4j、Prometheus 指标、Markdown �
 - `id`：整条 SSE 连接内从 1 开始递增，同时写入协议层 `id:` 字段。
 - `runId`：业务任务编号，本项目中等于 `analysisId`。
 - `seq`：同一个 Run 内所有事件共用的顺序号，从 0 开始。
-- `type`：与协议层 `event:` 一致，当前包括 `progress`、`ai-token`、`report` 和 `error`。
+- `type`：与协议层 `event:` 一致。当前包括阶段进度 `progress`、模型文本增量 `ai-token`、
+  五类结构化报告分区 `recognition` / `evidence` / `root-cause` / `action` / `ai-review`、
+  最终完整报告 `report` 和异常通知 `error`。
 - `data`：具体业务载荷。AI 载荷中的 `chunkSequence` 仅表示当前模型尝试内的文本片段顺序，
   重试或切换备用模型时会归零，不等同于 Run 级 `seq`。
 

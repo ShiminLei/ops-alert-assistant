@@ -4,6 +4,8 @@ import com.enterprise.opsassistant.ai.AiReviewResult;
 import com.enterprise.opsassistant.ai.AiReviewStreamEvent;
 import com.enterprise.opsassistant.ai.OpsAnalysisAiService;
 import com.enterprise.opsassistant.domain.AnalysisProgressEvent;
+import com.enterprise.opsassistant.domain.AnalysisSectionEvent;
+import com.enterprise.opsassistant.domain.AnalysisSectionType;
 import com.enterprise.opsassistant.domain.AnalysisStage;
 import com.enterprise.opsassistant.domain.IncidentReport;
 import com.enterprise.opsassistant.exception.AnalysisExecutionException;
@@ -153,12 +155,30 @@ public class SupervisorAgent {
                                   String conversationId,
                                   Consumer<AnalysisProgressEvent> observer,
                                   Consumer<AiReviewStreamEvent> aiStreamObserver) {
+        return analyze(rawAlert, conversationId, observer, aiStreamObserver, event -> {
+            // 同步调用方不需要逐块报告；完整 IncidentReport 仍由返回值提供。
+        });
+    }
+
+    /**
+     * 完成分析，并将阶段、模型 token 和已经确定的报告区段分别通知观察者。
+     *
+     * <p>区段事件只在对应业务对象完整生成后发送。例如一条 ToolEvidence 不会按字符拆分；模型
+     * token 才使用细粒度增量。这样页面既能逐步呈现，又始终只渲染结构完整的业务数据。</p>
+     */
+    public IncidentReport analyze(String rawAlert,
+                                  String conversationId,
+                                  Consumer<AnalysisProgressEvent> observer,
+                                  Consumer<AiReviewStreamEvent> aiStreamObserver,
+                                  Consumer<AnalysisSectionEvent> sectionObserver) {
         long startedAt = System.nanoTime();
         String analysisId = UUID.randomUUID().toString();
         String effectiveConversationId = normalizeConversationId(conversationId);
         Consumer<AnalysisProgressEvent> safeObserver = observer == null ? event -> { } : observer;
         Consumer<AiReviewStreamEvent> safeAiStreamObserver =
                 aiStreamObserver == null ? event -> { } : aiStreamObserver;
+        Consumer<AnalysisSectionEvent> safeSectionObserver =
+                sectionObserver == null ? event -> { } : sectionObserver;
 
         try (MDC.MDCCloseable ignored = MDC.putCloseable("traceId", analysisId)) {
             emit(safeObserver, analysisId, AnalysisStage.RECEIVED, "已收到告警，开始分析");
@@ -168,6 +188,8 @@ public class SupervisorAgent {
                 var recognition = alertParserAgent.parse(rawAlert);
                 emit(safeObserver, analysisId, AnalysisStage.ALERT_RECOGNIZED,
                         "已识别服务、告警类型和初始风险");
+                emitSection(safeSectionObserver, analysisId,
+                        AnalysisSectionType.RECOGNITION, recognition);
 
                 var toolPlan = toolPlanningAgent.plan(recognition);
                 emit(safeObserver, analysisId, AnalysisStage.TOOLS_PLANNED,
@@ -176,12 +198,18 @@ public class SupervisorAgent {
                 var evidenceCollection = evidenceCollectorAgent.collect(toolPlan);
                 emit(safeObserver, analysisId, AnalysisStage.EVIDENCE_COLLECTED,
                         "已收集 " + evidenceCollection.evidence().size() + " 条工具证据");
+                evidenceCollection.evidence().forEach(item -> emitSection(
+                        safeSectionObserver, analysisId, AnalysisSectionType.EVIDENCE, item));
 
                 var rootCause = rootCauseAgent.analyze(recognition, evidenceCollection);
                 emit(safeObserver, analysisId, AnalysisStage.ROOT_CAUSE_ANALYZED,
                         "已完成根因候选和最终风险判断");
+                emitSection(safeSectionObserver, analysisId,
+                        AnalysisSectionType.ROOT_CAUSE, rootCause);
 
                 var responsePlan = responsePlanAgent.plan(recognition, rootCause, evidenceCollection);
+                responsePlan.actions().forEach(action -> emitSection(
+                        safeSectionObserver, analysisId, AnalysisSectionType.ACTION, action));
                 AiReviewResult aiReview = opsAnalysisAiService.review(
                         analysisId,
                         effectiveConversationId,
@@ -197,6 +225,8 @@ public class SupervisorAgent {
                         aiReview.ruleOnly()
                                 ? "AI 模型不可用或未启用，保留规则分析结果"
                                 : "AI 模型已完成证据复核");
+                emitSection(safeSectionObserver, analysisId,
+                        AnalysisSectionType.AI_REVIEW, aiReview);
                 IncidentReport report = new IncidentReport(
                         analysisId,
                         effectiveConversationId,
@@ -300,6 +330,23 @@ public class SupervisorAgent {
             // 客户端断开是 SSE 场景中的常见情况。记录类型和原因即可，避免每个阶段重复打印长堆栈。
             log.warn("阶段事件观察者处理失败，不中断核心分析: analysisId={}, stage={}, reason={}",
                     analysisId, stage, observerException.toString());
+        }
+    }
+
+    /**
+     * 发布一块已经完成的报告数据；展示通道失败只记录告警，不反向破坏核心分析和最终报告。
+     */
+    private void emitSection(Consumer<AnalysisSectionEvent> observer,
+                             String analysisId,
+                             AnalysisSectionType section,
+                             Object data) {
+        AnalysisSectionEvent event = new AnalysisSectionEvent(
+                analysisId, section, data, Instant.now());
+        try {
+            observer.accept(event);
+        } catch (RuntimeException observerException) {
+            log.warn("报告区段观察者处理失败，不中断核心分析: analysisId={}, section={}, reason={}",
+                    analysisId, section, observerException.toString());
         }
     }
 }

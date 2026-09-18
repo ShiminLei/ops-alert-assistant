@@ -65,6 +65,8 @@ class FrontendPageTest {
                 // 这是浏览器认可的标准 JavaScript 类型，不影响脚本加载和执行。
                 .andExpect(content().contentTypeCompatibleWith("text/javascript"))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString(
-                        "/api/v1/alerts/analyze/stream")));
+                        "/api/v1/alerts/analyze/stream")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "updateReportSection")));
     }
 }
