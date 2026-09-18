@@ -4,6 +4,7 @@ import com.enterprise.opsassistant.config.OpsAssistantAiProperties;
 import com.enterprise.opsassistant.exception.AiProvidersUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -18,11 +19,19 @@ public class AiModelRouter {
     private static final Logger log = LoggerFactory.getLogger(AiModelRouter.class);
 
     private final OpsAssistantAiProperties properties;
-    private final AiClientRegistry registry;
+    private final ResilientAiClientInvoker clientInvoker;
 
-    public AiModelRouter(OpsAssistantAiProperties properties, AiClientRegistry registry) {
+    /** Spring 运行时使用带 Resilience4j 保护的模型调用器。 */
+    @Autowired
+    public AiModelRouter(OpsAssistantAiProperties properties,
+                         ResilientAiClientInvoker clientInvoker) {
         this.properties = properties;
-        this.registry = registry;
+        this.clientInvoker = clientInvoker;
+    }
+
+    /** 路由单元测试使用的便捷构造器，避免容错重试干扰路由次数断言。 */
+    AiModelRouter(OpsAssistantAiProperties properties, AiClientRegistry registry) {
+        this(properties, ResilientAiClientInvoker.direct(registry));
     }
 
     /**
@@ -63,9 +72,7 @@ public class AiModelRouter {
 
     /** 查找并调用指定客户端；未注册 Provider 也作为可降级故障处理。 */
     private AiChatResponse invoke(String provider, AiChatRequest request) {
-        AiChatClient client = registry.find(provider)
-                .orElseThrow(() -> new IllegalStateException("AI provider is not registered: " + provider));
-        return client.chat(request);
+        return clientInvoker.invoke(provider, request);
     }
 
     /** 对缺失主备名称给出明确配置错误，而不是产生难懂的空指针。 */

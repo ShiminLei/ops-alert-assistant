@@ -7,6 +7,7 @@ import com.enterprise.opsassistant.domain.AnalysisStage;
 import com.enterprise.opsassistant.domain.IncidentReport;
 import com.enterprise.opsassistant.exception.AnalysisExecutionException;
 import com.enterprise.opsassistant.exception.InvalidAlertException;
+import com.enterprise.opsassistant.observability.OpsAssistantMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -39,6 +41,7 @@ public class SupervisorAgent {
     private final RootCauseAgent rootCauseAgent;
     private final ResponsePlanAgent responsePlanAgent;
     private final OpsAnalysisAiService opsAnalysisAiService;
+    private final OpsAssistantMetrics metrics;
 
     /** 所有专业 Agent 和 AI Service 都通过构造器注入，使依赖明确且便于测试替换。 */
     @Autowired
@@ -47,13 +50,26 @@ public class SupervisorAgent {
                            EvidenceCollectorAgent evidenceCollectorAgent,
                            RootCauseAgent rootCauseAgent,
                            ResponsePlanAgent responsePlanAgent,
-                           OpsAnalysisAiService opsAnalysisAiService) {
+                           OpsAnalysisAiService opsAnalysisAiService,
+                           OpsAssistantMetrics metrics) {
         this.alertParserAgent = alertParserAgent;
         this.toolPlanningAgent = toolPlanningAgent;
         this.evidenceCollectorAgent = evidenceCollectorAgent;
         this.rootCauseAgent = rootCauseAgent;
         this.responsePlanAgent = responsePlanAgent;
         this.opsAnalysisAiService = opsAnalysisAiService;
+        this.metrics = metrics;
+    }
+
+    /** 不启动 Spring 但需要显式提供 AI Service 的测试便捷构造器。 */
+    public SupervisorAgent(AlertParserAgent alertParserAgent,
+                           ToolPlanningAgent toolPlanningAgent,
+                           EvidenceCollectorAgent evidenceCollectorAgent,
+                           RootCauseAgent rootCauseAgent,
+                           ResponsePlanAgent responsePlanAgent,
+                           OpsAnalysisAiService opsAnalysisAiService) {
+        this(alertParserAgent, toolPlanningAgent, evidenceCollectorAgent,
+                rootCauseAgent, responsePlanAgent, opsAnalysisAiService, OpsAssistantMetrics.noOp());
     }
 
     /**
@@ -92,6 +108,7 @@ public class SupervisorAgent {
      * @return 完整结构化事故报告
      */
     public IncidentReport analyze(String rawAlert, Consumer<AnalysisProgressEvent> observer) {
+        long startedAt = System.nanoTime();
         String analysisId = UUID.randomUUID().toString();
         Consumer<AnalysisProgressEvent> safeObserver = observer == null ? event -> { } : observer;
 
@@ -153,14 +170,21 @@ public class SupervisorAgent {
                         reviewedRootCause.finalRisk(),
                         evidenceCollection.evidence().size(),
                         responsePlan.actions().size());
+                metrics.recordAnalysisSuccess(
+                        elapsedSince(startedAt),
+                        reviewedRootCause.finalRisk(),
+                        aiReview
+                );
                 return report;
             } catch (InvalidAlertException exception) {
                 emit(safeObserver, analysisId, AnalysisStage.FAILED, "告警内容无效，分析终止");
                 log.warn("告警输入无效: analysisId={}, reason={}", analysisId, exception.getMessage());
+                metrics.recordAnalysisFailure(elapsedSince(startedAt), "invalid_alert");
                 throw exception;
             } catch (RuntimeException exception) {
                 emit(safeObserver, analysisId, AnalysisStage.FAILED, "分析过程中发生内部异常");
                 log.error("告警分析失败: analysisId={}", analysisId, exception);
+                metrics.recordAnalysisFailure(elapsedSince(startedAt), "internal_error");
                 throw new AnalysisExecutionException(
                         analysisId,
                         "alert analysis failed, analysisId=" + analysisId,
@@ -168,6 +192,11 @@ public class SupervisorAgent {
                 );
             }
         }
+    }
+
+    /** 统一使用单调递增时钟计算分析耗时，不受系统时间校准影响。 */
+    private Duration elapsedSince(long startedAt) {
+        return Duration.ofNanos(System.nanoTime() - startedAt);
     }
 
     /**

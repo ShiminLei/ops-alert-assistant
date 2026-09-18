@@ -2,6 +2,7 @@ package com.enterprise.opsassistant.api;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -13,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -28,6 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 @SpringBootTest
 @AutoConfigureMockMvc
+@AutoConfigureObservability
 class AlertAnalysisControllerTest {
 
     @Autowired
@@ -59,6 +62,16 @@ class AlertAnalysisControllerTest {
                 .andExpect(jsonPath("$.rootCause.reasoning[*]")
                         .value(org.hamcrest.Matchers.hasItem(
                                 org.hamcrest.Matchers.containsString("AI Mock 复核完成"))));
+
+        // 真正访问 Prometheus 端点，确认业务指标不仅存在内存中，还能被监控系统抓取。
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "ops_assistant_analysis_total")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "ops_assistant_tool_calls_total")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "ops_assistant_ai_provider_calls_total")));
     }
 
     /** 空告警应在进入 SupervisorAgent 前被校验，并返回统一 400 错误结构。 */

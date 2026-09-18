@@ -4,9 +4,11 @@ import com.enterprise.opsassistant.domain.EvidenceCollectionResult;
 import com.enterprise.opsassistant.domain.EvidenceStatus;
 import com.enterprise.opsassistant.domain.ToolEvidence;
 import com.enterprise.opsassistant.domain.ToolPlan;
+import com.enterprise.opsassistant.observability.OpsAssistantMetrics;
 import com.enterprise.opsassistant.tool.OperationsTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -30,12 +32,14 @@ public class EvidenceCollectorAgent {
 
     /** 按工具名索引 Spring 注入的全部工具，并保持注册顺序方便调试。 */
     private final Map<String, OperationsTool> toolsByName;
+    private final OpsAssistantMetrics metrics;
 
     /**
      * Spring 会自动注入所有 OperationsTool 实现。
      * 构造时检查重名，避免两个实现使用同一工具名导致其中一个被静默覆盖。
      */
-    public EvidenceCollectorAgent(List<OperationsTool> tools) {
+    @Autowired
+    public EvidenceCollectorAgent(List<OperationsTool> tools, OpsAssistantMetrics metrics) {
         Map<String, OperationsTool> indexedTools = new LinkedHashMap<>();
         for (OperationsTool tool : tools) {
             OperationsTool previous = indexedTools.putIfAbsent(tool.name(), tool);
@@ -44,6 +48,12 @@ public class EvidenceCollectorAgent {
             }
         }
         this.toolsByName = Map.copyOf(indexedTools);
+        this.metrics = metrics;
+    }
+
+    /** 不启动 Spring 的单元测试使用的便捷构造器。 */
+    public EvidenceCollectorAgent(List<OperationsTool> tools) {
+        this(tools, OpsAssistantMetrics.noOp());
     }
 
     /**
@@ -89,18 +99,24 @@ public class EvidenceCollectorAgent {
         OperationsTool tool = toolsByName.get(toolName);
         if (tool == null) {
             log.error("工具计划引用了未注册工具: tool={}, service={}", toolName, serviceName);
-            return failureEvidence(toolName, serviceName, "tool is not registered");
+            return recordAndReturn(failureEvidence(toolName, serviceName, "tool is not registered"));
         }
 
         try {
             ToolEvidence result = tool.execute(serviceName);
             log.info("工具调用完成: tool={}, service={}, status={}, durationMs={}",
                     toolName, serviceName, result.status(), result.durationMs());
-            return result;
+            return recordAndReturn(result);
         } catch (RuntimeException exception) {
             log.error("工具调用异常: tool={}, service={}", toolName, serviceName, exception);
-            return failureEvidence(toolName, serviceName, exception.getMessage());
+            return recordAndReturn(failureEvidence(toolName, serviceName, exception.getMessage()));
         }
+    }
+
+    /** 将工具结果写入 Micrometer 后原样返回，保证成功和失败分支都不会漏统计。 */
+    private ToolEvidence recordAndReturn(ToolEvidence evidence) {
+        metrics.recordToolCall(evidence);
+        return evidence;
     }
 
     /** 为编排错误或工具异常创建统一的失败证据。 */

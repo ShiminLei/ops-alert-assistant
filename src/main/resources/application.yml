@@ -28,6 +28,38 @@ logging:
   level:
     com.enterprise.opsassistant: INFO
 
+# AI Provider 容错的统一默认策略。代码会为每个 Provider 动态创建独立实例，
+# 所以主模型的故障统计、限流配额和熔断状态不会污染备用模型。
+resilience4j:
+  retry:
+    configs:
+      default:
+        max-attempts: 3
+        wait-duration: 300ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - io.github.resilience4j.ratelimiter.RequestNotPermitted
+  ratelimiter:
+    configs:
+      default:
+        limit-for-period: 20
+        limit-refresh-period: 1s
+        timeout-duration: 0
+        register-health-indicator: true
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
+
 ops-assistant:
   ai:
     primary-provider: ${AI_PRIMARY_PROVIDER:mock-primary}
@@ -46,4 +78,3 @@ ops-assistant:
         temperature: 0.2
         max-tokens: 2000
         timeout: 30s
-
