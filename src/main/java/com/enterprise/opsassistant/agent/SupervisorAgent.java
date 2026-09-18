@@ -193,7 +193,9 @@ public class SupervisorAgent {
                 emitSection(safeSectionObserver, analysisId,
                         AnalysisSectionType.RECOGNITION, recognition);
 
-                var toolPlan = toolPlanningAgent.plan(recognition);
+                // AI 根据结构化告警动态选择工具；ToolPlanningAgent 会过滤白名单、去重并补齐
+                // 三个基础工具，模型不可用时则退回确定性的告警类型规则计划。
+                var toolPlan = toolPlanningAgent.plan(recognition, effectiveConversationId);
                 emit(safeObserver, analysisId, AnalysisStage.TOOLS_PLANNED,
                         "已规划 " + toolPlan.toolNames().size() + " 个运维工具");
 

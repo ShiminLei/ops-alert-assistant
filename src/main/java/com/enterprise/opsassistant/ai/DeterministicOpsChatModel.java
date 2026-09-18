@@ -50,6 +50,21 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
             }
             """;
 
+    /** 本地工具规划响应覆盖全部六个只读工具，保持演示事故的证据链完整。 */
+    private static final String TOOL_PLANNING_JSON = """
+            {
+              "toolNames": [
+                "service-status",
+                "error-log",
+                "resource-usage",
+                "deployment",
+                "database-connection",
+                "dependency-status"
+              ],
+              "rationale": "本地 Mock 已通过 Spring AI Structured Output 生成只读工具计划"
+            }
+            """;
+
     /**
      * 返回符合 {@link AiReviewStructuredOutput} 字段结构的 JSON。
      * Spring AI 的结构化输出转换器会把该 JSON 反序列化成 Java record。
@@ -84,9 +99,13 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
         // 只检查本次调用最后一条用户消息，不能扫描整个 Prompt。连续追问时 Prompt 还包含历史
         // 阶段消息，扫描全部内容会让后续 AI 复核误命中上一轮的告警理解任务标记。
         String currentRequest = prompt.getLastUserOrToolResponseMessage().getText();
-        return currentRequest.contains("[TASK:ALERT_UNDERSTANDING]")
-                ? ALERT_UNDERSTANDING_JSON
-                : REVIEW_JSON;
+        if (currentRequest.contains("[TASK:ALERT_UNDERSTANDING]")) {
+            return ALERT_UNDERSTANDING_JSON;
+        }
+        if (currentRequest.contains("[TASK:TOOL_PLANNING]")) {
+            return TOOL_PLANNING_JSON;
+        }
+        return REVIEW_JSON;
     }
 
     private ChatResponse responseChunk(String content) {
