@@ -8,6 +8,7 @@ import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -66,12 +67,18 @@ public class ResilientSpringAiClientInvoker {
      * 本轮失败，从而允许备用模型提供一份格式正确的结果。</p>
      */
     public <T> T invoke(SpringAiProviderClient provider,
+                        String conversationId,
                         List<Message> messages,
                         Class<T> outputType) {
+        if (conversationId == null || conversationId.isBlank()) {
+            throw new IllegalArgumentException("conversationId must not be blank");
+        }
         long startedAt = System.nanoTime();
         Supplier<T> call = () -> provider.chatClient()
                 .prompt()
                 .messages(messages)
+                .advisors(spec -> spec.param(
+                        ChatMemory.CONVERSATION_ID, conversationId.trim()))
                 .call()
                 .entity(outputType);
 

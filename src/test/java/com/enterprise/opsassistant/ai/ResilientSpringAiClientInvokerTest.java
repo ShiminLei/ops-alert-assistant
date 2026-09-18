@@ -38,7 +38,8 @@ class ResilientSpringAiClientInvokerTest {
                 retryConfig(3), permissiveRateLimiter(), permissiveCircuitBreaker());
 
         AiReviewStructuredOutput response = invoker.invoke(
-                provider(model), messages, AiReviewStructuredOutput.class);
+                provider(model), "conversation-retry", messages,
+                AiReviewStructuredOutput.class);
 
         assertThat(response.evidenceConsistency()).isEqualTo("success");
         assertThat(model.invocations).isEqualTo(3);
@@ -82,7 +83,8 @@ class ResilientSpringAiClientInvokerTest {
 
     private AiReviewStructuredOutput invoke(ResilientSpringAiClientInvoker invoker,
                                             ChatModel model) {
-        return invoker.invoke(provider(model), messages, AiReviewStructuredOutput.class);
+        return invoker.invoke(provider(model), "conversation-resilience", messages,
+                AiReviewStructuredOutput.class);
     }
 
     /** 每个测试使用独立注册表，避免熔断状态和限流配额在不同用例之间串扰。 */

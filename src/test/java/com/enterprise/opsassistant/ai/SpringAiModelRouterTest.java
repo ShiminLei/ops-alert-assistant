@@ -64,6 +64,7 @@ class SpringAiModelRouterTest {
 
     private SpringAiRoutingResult<AiReviewStructuredOutput> call(SpringAiModelRouter router) {
         return router.callWithFallback(
+                "conversation-router-test",
                 List.of(new UserMessage("请复核测试告警")),
                 AiReviewStructuredOutput.class);
     }

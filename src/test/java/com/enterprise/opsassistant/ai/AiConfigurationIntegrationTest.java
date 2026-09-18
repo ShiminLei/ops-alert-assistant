@@ -44,6 +44,7 @@ class AiConfigurationIntegrationTest {
         assertThat(registry.size()).isEqualTo(2);
 
         SpringAiRoutingResult<AiReviewStructuredOutput> result = router.callWithFallback(
+                "conversation-config-test",
                 List.of(new UserMessage("测试模型配置")),
                 AiReviewStructuredOutput.class);
 

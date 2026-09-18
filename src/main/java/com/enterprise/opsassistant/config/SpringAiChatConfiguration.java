@@ -1,12 +1,15 @@
 package com.enterprise.opsassistant.config;
 
 import com.enterprise.opsassistant.ai.DeterministicOpsChatModel;
+import com.enterprise.opsassistant.ai.ConversationHistoryAdvisor;
 import com.enterprise.opsassistant.ai.SpringAiClientRegistry;
 import com.enterprise.opsassistant.ai.SpringAiProviderClient;
 import com.enterprise.opsassistant.tool.SpringAiOperationsTools;
 import io.micrometer.observation.ObservationRegistry;
 import io.netty.channel.ChannelOption;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.model.chat.client.autoconfigure.ChatClientBuilderConfigurer;
 import org.springframework.ai.model.tool.ToolCallingManager;
@@ -58,6 +61,7 @@ public class SpringAiChatConfiguration {
             @Qualifier("opsReviewSystemPrompt") Resource systemPrompt,
             ChatClientBuilderConfigurer builderConfigurer,
             SpringAiOperationsTools operationsTools,
+            ConversationHistoryAdvisor conversationHistoryAdvisor,
             ToolCallingManager toolCallingManager,
             ObservationRegistry observationRegistry,
             ResponseErrorHandler responseErrorHandler) {
@@ -81,6 +85,7 @@ public class SpringAiChatConfiguration {
             // 每个 Provider 使用相同的安全系统提示词，但各自持有独立模型连接。
             ChatClient chatClient = builderConfigurer.configure(ChatClient.builder(model))
                     .defaultSystem(systemPrompt)
+                    .defaultAdvisors(conversationHistoryAdvisor)
                     .defaultTools(operationsTools)
                     .build();
             clients.add(new SpringAiProviderClient(providerName, modelName, chatClient));
@@ -154,6 +159,28 @@ public class SpringAiChatConfiguration {
                 .retryTemplate(noNestedRetry)
                 .observationRegistry(observationRegistry)
                 .build();
+    }
+
+    /**
+     * 创建 Spring AI 原生的滑动窗口会话记忆。
+     *
+     * <p>窗口大小继续沿用项目配置；当消息超过上限时，Spring AI 会淘汰最旧消息。所有主备
+     * ChatClient 共享这个实例，所以同一个 conversationId 切换模型后仍能看到一致历史。</p>
+     */
+    @Bean
+    public ChatMemory opsChatMemory(OpsAssistantAiProperties properties) {
+        int configuredSize = properties.getMaxHistoryMessages();
+        // 每轮固定提交 USER/ASSISTANT 两条消息，偶数窗口避免裁剪后只留下半轮对话。
+        int evenWindowSize = configuredSize - (configuredSize % 2);
+        return MessageWindowChatMemory.builder()
+                .maxMessages(evenWindowSize)
+                .build();
+    }
+
+    /** 创建“只读历史、成功后由业务提交”的主备安全记忆 Advisor。 */
+    @Bean
+    public ConversationHistoryAdvisor conversationHistoryAdvisor(ChatMemory chatMemory) {
+        return new ConversationHistoryAdvisor(chatMemory);
     }
 
     /** 系统提示词单独作为资源 Bean，便于以后按 AI Service 场景拆分和版本管理。 */

@@ -43,7 +43,8 @@ public class SpringAiModelRouter {
     /**
      * 先调用主 Provider；调用、实体转换或容错组件抛出异常时，再调用备用 Provider。
      */
-    public <T> SpringAiRoutingResult<T> callWithFallback(List<Message> messages,
+    public <T> SpringAiRoutingResult<T> callWithFallback(String conversationId,
+                                                         List<Message> messages,
                                                          Class<T> outputType) {
         String primaryName = requireProviderName(
                 properties.getPrimaryProvider(), "primary-provider");
@@ -52,7 +53,7 @@ public class SpringAiModelRouter {
 
         RuntimeException primaryFailure;
         try {
-            return invoke(primaryName, messages, outputType, false);
+            return invoke(primaryName, conversationId, messages, outputType, false);
         } catch (RuntimeException exception) {
             primaryFailure = exception;
             log.warn("Spring AI 主模型调用失败，准备切换备用模型: primary={}, reason={}",
@@ -68,7 +69,8 @@ public class SpringAiModelRouter {
         }
 
         try {
-            SpringAiRoutingResult<T> result = invoke(backupName, messages, outputType, true);
+            SpringAiRoutingResult<T> result = invoke(
+                    backupName, conversationId, messages, outputType, true);
             log.info("Spring AI 备用模型接管成功: primary={}, backup={}, model={}",
                     primaryName, backupName, result.model());
             return result;
@@ -81,13 +83,14 @@ public class SpringAiModelRouter {
     }
 
     private <T> SpringAiRoutingResult<T> invoke(String providerName,
+                                                String conversationId,
                                                 List<Message> messages,
                                                 Class<T> outputType,
                                                 boolean fallbackUsed) {
         SpringAiProviderClient provider = registry.find(providerName)
                 .orElseThrow(() -> new IllegalStateException(
                         "Spring AI provider is not registered: " + providerName));
-        T body = invoker.invoke(provider, messages, outputType);
+        T body = invoker.invoke(provider, conversationId, messages, outputType);
         return new SpringAiRoutingResult<>(
                 body, provider.providerName(), provider.modelName(), fallbackUsed);
     }

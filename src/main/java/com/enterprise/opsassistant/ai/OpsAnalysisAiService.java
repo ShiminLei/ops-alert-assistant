@@ -14,7 +14,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,14 +89,12 @@ public class OpsAnalysisAiService {
             return AiReviewResult.ruleOnly("AI 上下文构建失败，保留 Java 规则分析结果", false);
         }
 
-        List<Message> messages = new ArrayList<>();
-        // 固定系统提示词由 ChatClient 配置统一添加；这里仅传入不可信历史数据与当前证据。
-        messages.addAll(chatMemory.history(conversationId));
-        messages.add(new UserMessage(userPrompt));
+        // 历史消息由 ConversationHistoryAdvisor 按 conversationId 自动注入；这里仅传当前证据。
+        List<Message> messages = List.of(new UserMessage(userPrompt));
 
         try {
             SpringAiRoutingResult<AiReviewStructuredOutput> routing = router.callWithFallback(
-                    messages, AiReviewStructuredOutput.class);
+                    conversationId, messages, AiReviewStructuredOutput.class);
             AiReviewResult result = new AiReviewResult(
                     routing.body().toNarrative(),
                     routing.provider(),
