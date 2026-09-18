@@ -1,5 +1,7 @@
 package com.enterprise.opsassistant.agent;
 
+import com.enterprise.opsassistant.ai.RootCauseAiService;
+import com.enterprise.opsassistant.ai.RootCauseStructuredOutput;
 import com.enterprise.opsassistant.domain.AlertRecognition;
 import com.enterprise.opsassistant.domain.AlertType;
 import com.enterprise.opsassistant.domain.EvidenceCollectionResult;
@@ -9,25 +11,43 @@ import com.enterprise.opsassistant.domain.RootCauseAssessment;
 import com.enterprise.opsassistant.domain.RootCauseCandidate;
 import com.enterprise.opsassistant.domain.ToolEvidence;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
- * 将多项运维证据综合成根因候选和安全决策的规则型 Agent。
+ * 使用 Spring AI 和 Java 安全规则共同完成根因综合的 Agent。
  *
  * <p>根因分析的核心不是“看到一个异常词就下结论”，而是交叉验证。以数据库连接池耗尽为例：
  * 数据库工具显示连接数达到上限，日志出现连接超时，发布记录又显示刚刚调小连接池，这三类独立
  * 证据共同出现时，置信度才会明显提高。</p>
  *
  * <p>该类同时承担确定性的安全规则：大面积不可用、极高错误率、实例全部失效等情况必须提升
- * 风险等级；模型将来可以补充候选原因和解释，但不能把这些硬规则判断出的风险降低。</p>
+ * 风险等级；模型可以补充候选原因和解释，但不能把这些硬规则判断出的风险降低。</p>
  */
 @Component
 public class RootCauseAgent {
+
+    private final RootCauseAiService rootCauseAiService;
+
+    /** Spring 运行时注入真正调用 ChatClient 的根因分析服务。 */
+    @Autowired
+    public RootCauseAgent(RootCauseAiService rootCauseAiService) {
+        this.rootCauseAiService = rootCauseAiService;
+    }
+
+    /** 离线领域测试使用纯规则模式，避免单元测试产生隐藏的模型或网络依赖。 */
+    public RootCauseAgent() {
+        this.rootCauseAiService = null;
+    }
 
     /**
      * 基于告警识别和工具证据生成根因评估。
@@ -37,6 +57,18 @@ public class RootCauseAgent {
      * @return 包含候选根因、推理、风险、回滚与升级建议的评估
      */
     public RootCauseAssessment analyze(AlertRecognition recognition, EvidenceCollectionResult collection) {
+        return analyze(recognition, collection, null);
+    }
+
+    /**
+     * 在当前会话中完成根因综合：先建立确定性规则基线，再吸收经过证据校验的 AI 候选。
+     *
+     * <p>风险等级、回滚建议、升级判断和用户影响始终来自 Java 安全规则。AI 只扩充候选原因和
+     * 推理说明，因此模型失败、幻觉或越权都不会削弱原有处置边界。</p>
+     */
+    public RootCauseAssessment analyze(AlertRecognition recognition,
+                                       EvidenceCollectionResult collection,
+                                       String conversationId) {
         if (recognition == null) {
             throw new IllegalArgumentException("recognition must not be null");
         }
@@ -55,7 +87,7 @@ public class RootCauseAgent {
         boolean escalationRequired = shouldEscalate(recognition, collection, finalRisk);
         String userImpact = describeUserImpact(recognition, context);
 
-        return new RootCauseAssessment(
+        RootCauseAssessment ruleAssessment = new RootCauseAssessment(
                 finalRisk,
                 candidates,
                 reasoning,
@@ -63,6 +95,103 @@ public class RootCauseAgent {
                 escalationRequired,
                 userImpact
         );
+
+        if (rootCauseAiService == null
+                || conversationId == null
+                || conversationId.isBlank()) {
+            return ruleAssessment;
+        }
+
+        return rootCauseAiService.analyze(conversationId, recognition, collection)
+                .map(candidate -> mergeAiAssessment(ruleAssessment, collection, candidate))
+                .orElse(ruleAssessment);
+    }
+
+    /**
+     * 将模型候选合并进规则评估，但只接受真实、非失败证据编号支持的内容。
+     *
+     * <p>置信度还会按照有效证据数量设置上限：单证据最多 0.65、双证据最多 0.80、三项及以上
+     * 最多 0.95。这个约束避免模型仅凭一条日志就声称拥有接近确定的结论。</p>
+     */
+    private RootCauseAssessment mergeAiAssessment(
+            RootCauseAssessment ruleAssessment,
+            EvidenceCollectionResult collection,
+            RootCauseStructuredOutput output) {
+        Set<String> usableEvidenceIds = collection.evidence().stream()
+                .filter(item -> item.status() != EvidenceStatus.FAILED)
+                .map(ToolEvidence::evidenceId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+        List<RootCauseCandidate> validAiCandidates = output.candidates().stream()
+                .map(candidate -> validateAiCandidate(candidate, usableEvidenceIds))
+                .flatMap(Optional::stream)
+                .toList();
+        if (validAiCandidates.isEmpty()) {
+            return ruleAssessment;
+        }
+
+        // 规则候选与 AI 候选都保留；使用描述去重，防止模型重复输出占满报告。
+        Map<String, RootCauseCandidate> uniqueCandidates = new LinkedHashMap<>();
+        java.util.stream.Stream.concat(
+                        ruleAssessment.candidates().stream(), validAiCandidates.stream())
+                .forEach(candidate -> uniqueCandidates.merge(
+                        candidate.description().toLowerCase(Locale.ROOT),
+                        candidate,
+                        (left, right) -> left.confidence() >= right.confidence() ? left : right));
+        List<RootCauseCandidate> mergedCandidates = uniqueCandidates.values().stream()
+                .sorted(Comparator.comparingDouble(RootCauseCandidate::confidence).reversed())
+                .toList();
+
+        List<String> reasoning = new ArrayList<>(ruleAssessment.reasoning());
+        output.reasoning().stream()
+                .filter(item -> item != null && !item.isBlank())
+                .map(String::trim)
+                .distinct()
+                .limit(5)
+                .map(item -> "AI 基于已校验证据的补充推理：" + item)
+                .forEach(reasoning::add);
+        reasoning.add("Java 已校验 AI 根因引用，本轮接受 "
+                + validAiCandidates.size() + " 个有真实证据支撑的模型候选");
+
+        return new RootCauseAssessment(
+                ruleAssessment.finalRisk(),
+                mergedCandidates,
+                reasoning,
+                ruleAssessment.rollbackRecommended(),
+                ruleAssessment.escalationRequired(),
+                ruleAssessment.userImpact());
+    }
+
+    /** 把单个不可信模型候选转换为满足领域约束的 RootCauseCandidate。 */
+    private Optional<RootCauseCandidate> validateAiCandidate(
+            RootCauseStructuredOutput.Candidate candidate,
+            Set<String> usableEvidenceIds) {
+        if (candidate == null
+                || candidate.description() == null
+                || candidate.description().isBlank()
+                || candidate.confidence() == null
+                || !Double.isFinite(candidate.confidence())
+                || candidate.confidence() < 0
+                || candidate.confidence() > 1) {
+            return Optional.empty();
+        }
+
+        List<String> validIds = candidate.evidenceIds().stream()
+                .filter(id -> id != null && !id.isBlank())
+                .map(String::trim)
+                .filter(usableEvidenceIds::contains)
+                .collect(java.util.stream.Collectors.collectingAndThen(
+                        java.util.stream.Collectors.toCollection(LinkedHashSet::new),
+                        List::copyOf));
+        if (validIds.isEmpty()) {
+            return Optional.empty();
+        }
+
+        double evidenceLimit = validIds.size() >= 3 ? 0.95 : validIds.size() == 2 ? 0.80 : 0.65;
+        return Optional.of(new RootCauseCandidate(
+                candidate.description().trim(),
+                Math.min(candidate.confidence(), evidenceLimit),
+                validIds));
     }
 
     /**

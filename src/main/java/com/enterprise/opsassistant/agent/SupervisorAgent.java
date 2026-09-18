@@ -205,7 +205,10 @@ public class SupervisorAgent {
                 evidenceCollection.evidence().forEach(item -> emitSection(
                         safeSectionObserver, analysisId, AnalysisSectionType.EVIDENCE, item));
 
-                var rootCause = rootCauseAgent.analyze(recognition, evidenceCollection);
+                // 根因 Agent 会把真实工具证据交给 Spring AI 做交叉综合，再由 Java 校验模型引用的
+                // evidenceId，并坚持风险、回滚和升级硬规则。模型失败时完整退回规则分析。
+                var rootCause = rootCauseAgent.analyze(
+                        recognition, evidenceCollection, effectiveConversationId);
                 emit(safeObserver, analysisId, AnalysisStage.ROOT_CAUSE_ANALYZED,
                         "已完成根因候选和最终风险判断");
                 emitSection(safeSectionObserver, analysisId,

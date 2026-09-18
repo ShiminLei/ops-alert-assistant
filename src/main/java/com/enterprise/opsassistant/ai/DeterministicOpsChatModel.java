@@ -8,7 +8,10 @@ import org.springframework.ai.chat.model.StreamingChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 本地开发和自动化测试使用的确定性 Spring AI {@link ChatModel}。
@@ -65,6 +68,10 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
             }
             """;
 
+    /** 从根因提示词的证据 JSON 中读取真实编号，保证本地 Mock 也遵守证据引用协议。 */
+    private static final Pattern EVIDENCE_ID_PATTERN =
+            Pattern.compile("\\\"evidenceId\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+
     /**
      * 返回符合 {@link AiReviewStructuredOutput} 字段结构的 JSON。
      * Spring AI 的结构化输出转换器会把该 JSON 反序列化成 Java record。
@@ -105,7 +112,41 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
         if (currentRequest.contains("[TASK:TOOL_PLANNING]")) {
             return TOOL_PLANNING_JSON;
         }
+        if (currentRequest.contains("[TASK:ROOT_CAUSE_ANALYSIS]")) {
+            return rootCauseResponse(currentRequest);
+        }
         return REVIEW_JSON;
+    }
+
+    /**
+     * 生成引用当前请求真实 evidenceId 的确定性根因响应。
+     *
+     * <p>证据编号每次运行都会变化，因此不能写死在常量里。Mock 只证明 Structured Output 和
+     * Java 校验链路已经接通，不冒充真实模型判断具体生产根因。</p>
+     */
+    private String rootCauseResponse(String currentRequest) {
+        Matcher matcher = EVIDENCE_ID_PATTERN.matcher(currentRequest);
+        List<String> evidenceIds = new ArrayList<>();
+        while (matcher.find() && evidenceIds.size() < 3) {
+            evidenceIds.add(matcher.group(1));
+        }
+        if (evidenceIds.isEmpty()) {
+            return "{\"candidates\":[],\"reasoning\":[\"本地 Mock 未发现可引用证据\"]}";
+        }
+
+        String idsJson = evidenceIds.stream()
+                .map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
+        return """
+                {
+                  "candidates": [{
+                    "description": "本地 Mock 已通过 Spring AI 完成多证据根因综合",
+                    "confidence": 0.72,
+                    "evidenceIds": [%s]
+                  }],
+                  "reasoning": ["候选只引用了本轮提示词中真实存在的证据编号"]
+                }
+                """.formatted(idsJson);
     }
 
     private ChatResponse responseChunk(String content) {

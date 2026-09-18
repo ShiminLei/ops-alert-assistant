@@ -1,5 +1,7 @@
 package com.enterprise.opsassistant.agent;
 
+import com.enterprise.opsassistant.ai.RootCauseAiService;
+import com.enterprise.opsassistant.ai.RootCauseStructuredOutput;
 import com.enterprise.opsassistant.domain.AlertRecognition;
 import com.enterprise.opsassistant.domain.RiskLevel;
 import com.enterprise.opsassistant.mock.MockOperationsDataStore;
@@ -16,6 +18,10 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 使用从自然语言到真实 Mock 工具的完整前置链路验证 RootCauseAgent，
@@ -77,5 +83,50 @@ class RootCauseAgentTest {
         assertThat(assessment.rollbackRecommended()).isFalse();
         assertThat(assessment.escalationRequired()).isFalse();
         assertThat(assessment.userImpact()).isEqualTo("尚未确认用户影响");
+    }
+
+    /**
+     * AI 虚构的证据编号不能进入报告；只剩一条真实证据时，模型置信度必须被压到单证据上限。
+     */
+    @Test
+    void shouldRejectInventedEvidenceReferencesAndKeepJavaSafetyDecisions() {
+        AlertRecognition recognition = parser.parse(
+                "支付服务刚发布后大量请求超时，错误率18.7%，用户支付失败"
+        );
+        var collection = collector.collect(planner.plan(recognition));
+        String realEvidenceId = collection.evidence().get(0).evidenceId();
+        RootCauseAiService aiService = mock(RootCauseAiService.class);
+        when(aiService.analyze(anyString(), any(), any())).thenReturn(java.util.Optional.of(
+                new RootCauseStructuredOutput(
+                        List.of(
+                                new RootCauseStructuredOutput.Candidate(
+                                        "模型提出且有一条真实证据支持的补充候选",
+                                        0.99,
+                                        List.of(realEvidenceId, "invented-evidence")),
+                                new RootCauseStructuredOutput.Candidate(
+                                        "完全依赖虚构证据的候选",
+                                        0.99,
+                                        List.of("invented-only"))
+                        ),
+                        List.of("对工具结果进行了交叉分析")
+                )));
+
+        var assessment = new RootCauseAgent(aiService)
+                .analyze(recognition, collection, "conversation-root-cause");
+
+        assertThat(assessment.finalRisk()).isEqualTo(RiskLevel.HIGH);
+        assertThat(assessment.rollbackRecommended()).isTrue();
+        assertThat(assessment.escalationRequired()).isTrue();
+        assertThat(assessment.candidates())
+                .anySatisfy(candidate -> {
+                    assertThat(candidate.description()).contains("一条真实证据");
+                    assertThat(candidate.confidence()).isEqualTo(0.65);
+                    assertThat(candidate.evidenceIds()).containsExactly(realEvidenceId);
+                })
+                .noneMatch(candidate -> candidate.description().contains("完全依赖虚构证据"));
+        assertThat(assessment.candidates())
+                .flatExtracting(com.enterprise.opsassistant.domain.RootCauseCandidate::evidenceIds)
+                .doesNotContain("invented-evidence", "invented-only");
+        assertThat(assessment.reasoning()).anyMatch(item -> item.contains("接受 1 个"));
     }
 }
