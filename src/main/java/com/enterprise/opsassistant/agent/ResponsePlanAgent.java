@@ -1,5 +1,7 @@
 package com.enterprise.opsassistant.agent;
 
+import com.enterprise.opsassistant.ai.ResponsePlanAiService;
+import com.enterprise.opsassistant.ai.ResponsePlanStructuredOutput;
 import com.enterprise.opsassistant.domain.ActionUrgency;
 import com.enterprise.opsassistant.domain.AlertRecognition;
 import com.enterprise.opsassistant.domain.EvidenceCollectionResult;
@@ -8,6 +10,7 @@ import com.enterprise.opsassistant.domain.ResponsePlan;
 import com.enterprise.opsassistant.domain.RiskLevel;
 import com.enterprise.opsassistant.domain.RootCauseAssessment;
 import com.enterprise.opsassistant.domain.ToolEvidence;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -16,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Map;
 
 /**
  * 根据根因评估生成有顺序、紧急程度和责任人的处置方案。
@@ -24,10 +28,48 @@ import java.util.Set;
  * 这是运维 AI 的重要权限边界：分析和建议可以自动化，高风险变更仍需有权限的人员确认执行。</p>
  *
  * <p>Java 规则确保高风险告警一定包含升级动作、建议回滚时一定给出目标版本、数据库饱和时
- * 一定同时包含止损与后续修复。未来模型可以把动作描述得更贴近现场，但不能删除这些安全动作。</p>
+ * 一定同时包含止损与后续修复。模型可以把动作描述得更贴近现场，但不能删除这些安全动作。</p>
  */
 @Component
 public class ResponsePlanAgent {
+
+    /** 模型只能补充这些可观察指标；最终规则指标始终保留。 */
+    private static final Set<String> SAFE_FOLLOW_UP_METRICS = Set.of(
+            "服务可用率", "健康实例数", "用户请求成功率", "服务错误率", "P99 响应延迟",
+            "CPU 使用率", "内存使用率", "数据库活跃连接数/最大连接数", "数据库连接等待线程数",
+            "平均查询耗时", "异常依赖调用延迟", "异常依赖成功率"
+    );
+
+    /** 出现在模型自由文本中的高危险操作会让整条候选失效。 */
+    private static final List<String> FORBIDDEN_ACTION_FRAGMENTS = List.of(
+            "rm -rf", "drop table", "truncate table", "delete from", "删除生产数据",
+            "关闭数据库", "绕过审批", "跳过审批", "禁用审计", "清空数据库"
+    );
+
+    /** 把受控枚举责任角色转换为最终报告中的中文角色名称。 */
+    private static final Map<ResponsePlanStructuredOutput.OwnerRole, String> OWNER_NAMES = Map.of(
+            ResponsePlanStructuredOutput.OwnerRole.INCIDENT_COMMANDER, "事故指挥官",
+            ResponsePlanStructuredOutput.OwnerRole.APPLICATION_ON_CALL, "应用值班",
+            ResponsePlanStructuredOutput.OwnerRole.PLATFORM_OPERATIONS, "平台运维",
+            ResponsePlanStructuredOutput.OwnerRole.DBA, "DBA",
+            ResponsePlanStructuredOutput.OwnerRole.APPLICATION_ENGINEER, "应用研发",
+            ResponsePlanStructuredOutput.OwnerRole.APPLICATION_OWNER, "应用负责人",
+            ResponsePlanStructuredOutput.OwnerRole.DEPENDENCY_OWNER, "依赖服务负责人",
+            ResponsePlanStructuredOutput.OwnerRole.SECURITY_TEAM, "安全团队"
+    );
+
+    private final ResponsePlanAiService responsePlanAiService;
+
+    /** Spring 运行时注入使用 ChatClient 的处置规划服务。 */
+    @Autowired
+    public ResponsePlanAgent(ResponsePlanAiService responsePlanAiService) {
+        this.responsePlanAiService = responsePlanAiService;
+    }
+
+    /** 离线领域测试使用纯规则模式，不产生隐藏模型调用。 */
+    public ResponsePlanAgent() {
+        this.responsePlanAiService = null;
+    }
 
     /**
      * 生成结构化处置计划。
@@ -40,6 +82,16 @@ public class ResponsePlanAgent {
     public ResponsePlan plan(AlertRecognition recognition,
                              RootCauseAssessment assessment,
                              EvidenceCollectionResult collection) {
+        return plan(recognition, assessment, collection, null);
+    }
+
+    /**
+     * 先生成不可缺失的 Java 规则方案，再合并通过安全校验的 AI 候选动作。
+     */
+    public ResponsePlan plan(AlertRecognition recognition,
+                             RootCauseAssessment assessment,
+                             EvidenceCollectionResult collection,
+                             String conversationId) {
         if (recognition == null || assessment == null || collection == null) {
             throw new IllegalArgumentException("recognition, assessment and collection must not be null");
         }
@@ -58,9 +110,146 @@ public class ResponsePlanAgent {
         addEvidenceGapAction(drafts, collection);
         addCommonActions(drafts, recognition, assessment, followUpMetrics);
 
+        ResponsePlan rulePlan = buildPlan(recognition, assessment, drafts, followUpMetrics);
+        if (responsePlanAiService == null
+                || conversationId == null
+                || conversationId.isBlank()) {
+            return rulePlan;
+        }
+
+        return responsePlanAiService.plan(conversationId, recognition, assessment, collection)
+                .map(output -> mergeAiPlan(
+                        recognition, assessment, collection, rulePlan, output))
+                .orElse(rulePlan);
+    }
+
+    /** 将规则草稿转换为顺序连续、指标非空的完整方案。 */
+    private ResponsePlan buildPlan(AlertRecognition recognition,
+                                   RootCauseAssessment assessment,
+                                   List<ActionDraft> drafts,
+                                   Set<String> followUpMetrics) {
         List<RecommendedAction> orderedActions = numberActions(drafts);
         String summary = buildSummary(recognition, assessment, orderedActions);
         return new ResponsePlan(orderedActions, List.copyOf(followUpMetrics), summary);
+    }
+
+    /**
+     * 合并 AI 处置建议；Java 规则动作永远保留，模型只能安全地增加建议和观察指标。
+     */
+    private ResponsePlan mergeAiPlan(AlertRecognition recognition,
+                                     RootCauseAssessment assessment,
+                                     EvidenceCollectionResult collection,
+                                     ResponsePlan rulePlan,
+                                     ResponsePlanStructuredOutput output) {
+        Set<String> usableEvidenceIds = collection.evidence().stream()
+                .filter(item -> item.status() != com.enterprise.opsassistant.domain.EvidenceStatus.FAILED)
+                .map(ToolEvidence::evidenceId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        List<ActionDraft> aiDrafts = output.actions().stream()
+                .map(action -> validateAiAction(action, assessment, usableEvidenceIds))
+                .flatMap(Optional::stream)
+                .toList();
+        if (aiDrafts.isEmpty()) {
+            return rulePlan;
+        }
+
+        List<ActionDraft> combined = new ArrayList<>();
+        rulePlan.actions().forEach(action -> combined.add(
+                new ActionDraft(action.urgency(), action.action(), action.owner())));
+        Set<String> existingDescriptions = combined.stream()
+                .map(action -> action.action().toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        aiDrafts.stream()
+                .filter(action -> existingDescriptions.add(action.action().toLowerCase(Locale.ROOT)))
+                .forEach(combined::add);
+        // 紧急动作始终排在短期和观察动作之前；流排序稳定，因此规则动作内部次序不会改变。
+        combined.sort(java.util.Comparator.comparingInt(action -> urgencyRank(action.urgency())));
+
+        LinkedHashSet<String> metrics = new LinkedHashSet<>(rulePlan.followUpMetrics());
+        output.followUpMetrics().stream()
+                .filter(metric -> metric != null && !metric.isBlank())
+                .map(String::trim)
+                .filter(SAFE_FOLLOW_UP_METRICS::contains)
+                .forEach(metrics::add);
+
+        List<RecommendedAction> actions = numberActions(combined);
+        String summary = buildSummary(recognition, assessment, actions)
+                + "；已接受 " + aiDrafts.size() + " 项经过证据和权限校验的 AI 补充建议";
+        return new ResponsePlan(actions, List.copyOf(metrics), summary);
+    }
+
+    /** 校验模型动作的权限、证据、风险级别和文本安全边界。 */
+    private Optional<ActionDraft> validateAiAction(
+            ResponsePlanStructuredOutput.Action candidate,
+            RootCauseAssessment assessment,
+            Set<String> usableEvidenceIds) {
+        if (candidate == null
+                || candidate.type() == null
+                || candidate.urgency() == null
+                || candidate.ownerRole() == null
+                || candidate.action() == null
+                || candidate.action().isBlank()) {
+            return Optional.empty();
+        }
+
+        String actionText = candidate.action().trim();
+        String lowerAction = actionText.toLowerCase(Locale.ROOT);
+        if (FORBIDDEN_ACTION_FRAGMENTS.stream().anyMatch(lowerAction::contains)) {
+            return Optional.empty();
+        }
+
+        // 不能只相信模型自行填写的 type。文本出现生产变更语义时同样执行人工审批约束，
+        // 防止模型把“重启”错误标成 INVESTIGATE 从而绕过类型校验。
+        boolean textSuggestsProductionChange = java.util.stream.Stream.of(
+                        "回滚", "扩容", "修改配置", "变更配置", "重启", "限流", "降级", "摘除", "切换流量")
+                .anyMatch(lowerAction::contains);
+        boolean productionChange = candidate.type() == ResponsePlanStructuredOutput.ActionType.ROLLBACK
+                || candidate.type() == ResponsePlanStructuredOutput.ActionType.SCALE
+                || candidate.type() == ResponsePlanStructuredOutput.ActionType.CONFIG_CHANGE
+                || textSuggestsProductionChange;
+        if (productionChange && !candidate.requiresHumanApproval()) {
+            return Optional.empty();
+        }
+        if (candidate.type() == ResponsePlanStructuredOutput.ActionType.ROLLBACK
+                && !assessment.rollbackRecommended()) {
+            return Optional.empty();
+        }
+        if (candidate.type() == ResponsePlanStructuredOutput.ActionType.ESCALATE
+                && !assessment.escalationRequired()) {
+            return Optional.empty();
+        }
+        if (assessment.finalRisk() == RiskLevel.LOW
+                && candidate.type() != ResponsePlanStructuredOutput.ActionType.INVESTIGATE
+                && candidate.type() != ResponsePlanStructuredOutput.ActionType.OBSERVE) {
+            return Optional.empty();
+        }
+        if (assessment.finalRisk() == RiskLevel.LOW
+                && candidate.urgency() != ActionUrgency.OBSERVATION) {
+            return Optional.empty();
+        }
+
+        boolean hasRealEvidence = candidate.evidenceIds().stream()
+                .filter(id -> id != null && !id.isBlank())
+                .map(String::trim)
+                .anyMatch(usableEvidenceIds::contains);
+        if (!hasRealEvidence) {
+            return Optional.empty();
+        }
+
+        if (productionChange && !lowerAction.contains("人工确认")) {
+            actionText = "经人工确认后，" + actionText;
+        }
+        return Optional.of(new ActionDraft(
+                candidate.urgency(), actionText, OWNER_NAMES.get(candidate.ownerRole())));
+    }
+
+    /** 把紧急程度转换为稳定排序权重。 */
+    private int urgencyRank(ActionUrgency urgency) {
+        return switch (urgency) {
+            case IMMEDIATE -> 0;
+            case SHORT_TERM -> 1;
+            case OBSERVATION -> 2;
+        };
     }
 
     /** 高风险且需要人工升级时，第一步先建立响应责任和沟通通道。 */

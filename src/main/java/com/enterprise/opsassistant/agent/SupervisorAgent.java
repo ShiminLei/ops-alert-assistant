@@ -214,7 +214,10 @@ public class SupervisorAgent {
                 emitSection(safeSectionObserver, analysisId,
                         AnalysisSectionType.ROOT_CAUSE, rootCause);
 
-                var responsePlan = responsePlanAgent.plan(recognition, rootCause, evidenceCollection);
+                // Spring AI 可根据已校验根因提出更贴近现场的处置动作；ResponsePlanAgent 会继续
+                // 校验动作类型、真实证据、人工审批和风险边界，且不会执行任何生产写操作。
+                var responsePlan = responsePlanAgent.plan(
+                        recognition, rootCause, evidenceCollection, effectiveConversationId);
                 responsePlan.actions().forEach(action -> emitSection(
                         safeSectionObserver, analysisId, AnalysisSectionType.ACTION, action));
                 AiReviewResult aiReview = opsAnalysisAiService.review(

@@ -115,6 +115,9 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
         if (currentRequest.contains("[TASK:ROOT_CAUSE_ANALYSIS]")) {
             return rootCauseResponse(currentRequest);
         }
+        if (currentRequest.contains("[TASK:RESPONSE_PLANNING]")) {
+            return responsePlanResponse(currentRequest);
+        }
         return REVIEW_JSON;
     }
 
@@ -125,11 +128,7 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
      * Java 校验链路已经接通，不冒充真实模型判断具体生产根因。</p>
      */
     private String rootCauseResponse(String currentRequest) {
-        Matcher matcher = EVIDENCE_ID_PATTERN.matcher(currentRequest);
-        List<String> evidenceIds = new ArrayList<>();
-        while (matcher.find() && evidenceIds.size() < 3) {
-            evidenceIds.add(matcher.group(1));
-        }
+        List<String> evidenceIds = evidenceIdsFromRequest(currentRequest, 3);
         if (evidenceIds.isEmpty()) {
             return "{\"candidates\":[],\"reasoning\":[\"本地 Mock 未发现可引用证据\"]}";
         }
@@ -147,6 +146,45 @@ public class DeterministicOpsChatModel implements ChatModel, StreamingChatModel 
                   "reasoning": ["候选只引用了本轮提示词中真实存在的证据编号"]
                 }
                 """.formatted(idsJson);
+    }
+
+    /** 为处置阶段生成一条引用真实证据、且不会执行生产变更的安全 Mock 建议。 */
+    private String responsePlanResponse(String currentRequest) {
+        List<String> evidenceIds = evidenceIdsFromRequest(currentRequest, 1);
+        if (evidenceIds.isEmpty()) {
+            return "{\"actions\":[],\"followUpMetrics\":[],\"rationale\":\"没有可引用证据\"}";
+        }
+
+        boolean lowRisk = currentRequest.contains("\"finalRisk\":\"LOW\"");
+        String actionType = lowRisk ? "OBSERVE" : "INVESTIGATE";
+        String urgency = lowRisk ? "OBSERVATION" : "SHORT_TERM";
+        String action = lowRisk
+                ? "继续核对告警来源，并观察服务状态是否发生变化"
+                : "结合本轮证据复核异常时间线和受影响请求范围";
+        return """
+                {
+                  "actions": [{
+                    "type": "%s",
+                    "urgency": "%s",
+                    "action": "%s",
+                    "ownerRole": "APPLICATION_ON_CALL",
+                    "requiresHumanApproval": false,
+                    "evidenceIds": ["%s"]
+                  }],
+                  "followUpMetrics": ["服务可用率", "模型虚构指标"],
+                  "rationale": "本地 Mock 已通过 Spring AI 生成只读处置建议"
+                }
+                """.formatted(actionType, urgency, action, evidenceIds.get(0));
+    }
+
+    /** 从本轮提示词中按出现顺序提取不超过 limit 个证据编号。 */
+    private List<String> evidenceIdsFromRequest(String currentRequest, int limit) {
+        Matcher matcher = EVIDENCE_ID_PATTERN.matcher(currentRequest);
+        List<String> evidenceIds = new ArrayList<>();
+        while (matcher.find() && evidenceIds.size() < limit) {
+            evidenceIds.add(matcher.group(1));
+        }
+        return evidenceIds;
     }
 
     private ChatResponse responseChunk(String content) {
