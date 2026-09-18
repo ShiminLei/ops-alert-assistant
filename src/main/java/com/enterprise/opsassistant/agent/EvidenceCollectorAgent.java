@@ -72,7 +72,7 @@ public class EvidenceCollectorAgent {
 
         List<ToolEvidence> evidence = new ArrayList<>();
         for (String toolName : plan.toolNames()) {
-            evidence.add(invokeSafely(toolName, plan.serviceName()));
+            evidence.add(queryTool(toolName, plan.serviceName()));
         }
 
         long successCount = countByStatus(evidence, EvidenceStatus.SUCCESS);
@@ -95,7 +95,7 @@ public class EvidenceCollectorAgent {
      * 安全调用单个工具。不存在的工具和运行期异常都会转换为 FAILED 证据，
      * 从而保证一个工具故障不会阻断其余证据收集。
      */
-    private ToolEvidence invokeSafely(String toolName, String serviceName) {
+    public ToolEvidence queryTool(String toolName, String serviceName) {
         OperationsTool tool = toolsByName.get(toolName);
         if (tool == null) {
             log.error("工具计划引用了未注册工具: tool={}, service={}", toolName, serviceName);

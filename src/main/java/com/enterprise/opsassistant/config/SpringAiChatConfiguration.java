@@ -3,6 +3,7 @@ package com.enterprise.opsassistant.config;
 import com.enterprise.opsassistant.ai.DeterministicOpsChatModel;
 import com.enterprise.opsassistant.ai.SpringAiClientRegistry;
 import com.enterprise.opsassistant.ai.SpringAiProviderClient;
+import com.enterprise.opsassistant.tool.SpringAiOperationsTools;
 import io.micrometer.observation.ObservationRegistry;
 import io.netty.channel.ChannelOption;
 import org.springframework.ai.chat.client.ChatClient;
@@ -56,6 +57,7 @@ public class SpringAiChatConfiguration {
             OpsAssistantAiProperties properties,
             @Qualifier("opsReviewSystemPrompt") Resource systemPrompt,
             ChatClientBuilderConfigurer builderConfigurer,
+            SpringAiOperationsTools operationsTools,
             ToolCallingManager toolCallingManager,
             ObservationRegistry observationRegistry,
             ResponseErrorHandler responseErrorHandler) {
@@ -79,6 +81,7 @@ public class SpringAiChatConfiguration {
             // 每个 Provider 使用相同的安全系统提示词，但各自持有独立模型连接。
             ChatClient chatClient = builderConfigurer.configure(ChatClient.builder(model))
                     .defaultSystem(systemPrompt)
+                    .defaultTools(operationsTools)
                     .build();
             clients.add(new SpringAiProviderClient(providerName, modelName, chatClient));
         }
@@ -135,6 +138,8 @@ public class SpringAiChatConfiguration {
                 .model(provider.getModel().trim())
                 .temperature(provider.getTemperature())
                 .maxTokens(provider.getMaxTokens())
+                // 明确启用 Spring AI 的完整工具生命周期：模型选工具、Java 执行、结果回传模型。
+                .internalToolExecutionEnabled(true)
                 .build();
 
         RetryTemplate noNestedRetry = RetryTemplate.builder()
