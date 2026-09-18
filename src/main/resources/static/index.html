@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="输入自然语言运维告警，实时获取证据、根因和安全处置建议。">
+    <title>企业运维告警智能处置助手</title>
+    <link rel="icon" type="image/svg+xml"
+          href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2308111f'/%3E%3Cpath d='M10 34h10l5-15 9 29 6-14h14' fill='none' stroke='%2338e8b0' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <!-- 使用相对路径后，Spring Boot 和直接打开 HTML 两种方式都能加载页面样式。 -->
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<!--
+  页面保持为 Spring Boot 自带的纯静态资源，不引入 Node.js 或前端构建工具。
+  这样学习者只需启动一个 Java 应用，就能同时使用页面和后端 API。
+-->
+<div class="app-shell">
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="返回告警处置助手首页">
+            <span class="brand-mark" aria-hidden="true"><span></span></span>
+            <span>
+                <strong>OPS SENTINEL</strong>
+                <small>企业运维告警智能处置助手</small>
+            </span>
+        </a>
+        <div class="system-state" aria-label="系统状态">
+            <span class="status-pulse" aria-hidden="true"></span>
+            <span>分析服务已就绪</span>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <!-- 左侧是唯一的主要操作区：输入告警、查看会话编号并发起分析。 -->
+        <section class="command-panel" aria-labelledby="command-title">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">INCIDENT INPUT</p>
+                    <h1 id="command-title">描述当前告警</h1>
+                </div>
+                <button id="new-conversation" class="text-button" type="button" hidden>新建会话</button>
+            </div>
+
+            <p class="helper-text">可直接粘贴告警原文，也可以补充服务名、异常指标、发布时间和用户影响。</p>
+
+            <!--
+              直接双击 HTML 时只能预览界面，无法调用 Java 后端。脚本会在 file:// 协议下显示此提示，
+              并锁定分析按钮，避免用户把缺少后端误认为告警分析故障。
+            -->
+            <div id="runtime-warning" class="runtime-warning" role="status" hidden>
+                <strong>当前是静态文件预览。</strong>
+                样式可以查看，但智能分析需要先启动 Spring Boot，再访问
+                <a href="http://127.0.0.1:8080/">http://127.0.0.1:8080/</a>。
+            </div>
+
+            <form id="analysis-form">
+                <label class="sr-only" for="alert-text">自然语言告警内容</label>
+                <textarea id="alert-text" name="alertText" maxlength="4000" required
+                          placeholder="例如：支付服务刚发布后大量请求超时，错误率 18.7%，用户支付失败"></textarea>
+                <div class="input-meta">
+                    <span id="character-count">0 / 4000</span>
+                    <span>Enter 换行 · ⌘/Ctrl + Enter 分析</span>
+                </div>
+
+                <div class="examples" aria-label="告警示例">
+                    <span>快速填入</span>
+                    <button type="button" data-alert="支付服务刚发布后大量请求超时，错误率18.7%，用户支付失败">发布后故障</button>
+                    <button type="button" data-alert="订单服务 CPU 使用率达到92%，接口延迟持续升高">资源异常</button>
+                    <button type="button" data-alert="库存服务连接数据库失败，连接池已耗尽">数据库异常</button>
+                </div>
+
+                <button id="submit-button" class="primary-button" type="submit">
+                    <span class="button-label">开始智能分析</span>
+                    <span class="button-arrow" aria-hidden="true">↗</span>
+                </button>
+            </form>
+
+            <!-- 首次分析后显示服务端生成的编号，下一次提交会自动携带它形成连续追问。 -->
+            <div id="conversation-card" class="conversation-card" hidden>
+                <span>当前会话</span>
+                <code id="conversation-id"></code>
+                <p>继续输入新的现象或指标，系统会结合本会话历史复核。</p>
+            </div>
+
+            <aside class="safety-note">
+                <span aria-hidden="true">!</span>
+                <p><strong>安全边界</strong> 页面只生成处置建议，不会直接执行回滚、扩容、限流或配置变更。</p>
+            </aside>
+        </section>
+
+        <!-- 右侧在空状态、分析中、成功和失败之间切换，并通过 aria-live 播报变化。 -->
+        <section class="result-panel" aria-labelledby="result-title">
+            <div class="result-toolbar">
+                <div>
+                    <p class="eyebrow">ANALYSIS WORKSPACE</p>
+                    <h2 id="result-title">分析工作区</h2>
+                </div>
+                <button id="download-report" class="secondary-button" type="button" hidden>下载 Markdown</button>
+            </div>
+
+            <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+            <div id="empty-state" class="empty-state">
+                <div class="radar" aria-hidden="true">
+                    <span></span><span></span><span></span>
+                </div>
+                <h3>等待告警输入</h3>
+                <p>分析开始后，这里会依次展示工具调用进度、根因证据、风险判断与处置动作。</p>
+                <div class="capability-row" aria-label="系统能力">
+                    <span>6 个运维工具</span>
+                    <span>多 Agent 协作</span>
+                    <span>安全规则兜底</span>
+                </div>
+            </div>
+
+            <div id="progress-view" class="progress-view" aria-live="polite" hidden>
+                <div class="progress-header">
+                    <div>
+                        <span class="working-dot" aria-hidden="true"></span>
+                        <strong id="progress-message">正在建立分析任务…</strong>
+                    </div>
+                    <span id="progress-percent">0%</span>
+                </div>
+                <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
+                <ol id="stage-list" class="stage-list"></ol>
+            </div>
+
+            <article id="report-view" class="report-view" aria-live="polite" hidden></article>
+        </section>
+    </main>
+</div>
+
+<noscript>此页面需要启用 JavaScript 才能调用告警分析接口。</noscript>
+<script src="js/app.js" defer></script>
+</body>
+</html>

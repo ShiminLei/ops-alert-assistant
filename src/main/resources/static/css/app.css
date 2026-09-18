@@ -1,0 +1,385 @@
+/*
+ * 页面视觉方向：深色运维控制台。
+ * 颜色变量集中定义，既方便统一主题，也避免各组件出现相近但不一致的颜色值。
+ */
+:root {
+    color-scheme: dark;
+    --bg: #07101c;
+    --bg-deep: #030812;
+    --panel: rgba(13, 25, 40, 0.88);
+    --panel-raised: #122438;
+    --line: rgba(143, 178, 204, 0.17);
+    --line-strong: rgba(143, 178, 204, 0.3);
+    --text: #eff7fb;
+    --muted: #92a9b8;
+    --accent: #38e8b0;
+    --accent-dark: #163d38;
+    --cyan: #5cc8ff;
+    --warning: #ffbe55;
+    --danger: #ff6b7a;
+    --high: #ff7d6e;
+    --medium: #ffbe55;
+    --low: #38e8b0;
+    --shadow: 0 28px 80px rgba(0, 0, 0, 0.32);
+    font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { min-width: 320px; background: var(--bg-deep); }
+
+/*
+ * hidden 是页面状态机控制空状态、进度和报告切换的统一开关。
+ * 某些组件自身声明了 display:flex/grid，因此需要提高优先级，避免组件样式覆盖浏览器默认隐藏规则。
+ */
+[hidden] { display: none !important; }
+
+body {
+    min-height: 100vh;
+    margin: 0;
+    color: var(--text);
+    background:
+        radial-gradient(circle at 76% 8%, rgba(45, 187, 166, 0.12), transparent 32rem),
+        radial-gradient(circle at 8% 88%, rgba(50, 111, 180, 0.12), transparent 30rem),
+        linear-gradient(145deg, var(--bg-deep), var(--bg));
+}
+
+button, textarea { font: inherit; }
+button { cursor: pointer; }
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.app-shell { min-height: 100vh; }
+
+/* 顶部只保留品牌与服务状态，避免传统后台导航挤占主要任务空间。 */
+.topbar {
+    height: 76px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 clamp(1rem, 4vw, 4rem);
+    border-bottom: 1px solid var(--line);
+    background: rgba(3, 8, 18, 0.74);
+    backdrop-filter: blur(18px);
+}
+
+.brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.85rem;
+    color: inherit;
+    text-decoration: none;
+}
+
+.brand-mark {
+    position: relative;
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(56, 232, 176, 0.5);
+    border-radius: 11px;
+    background: rgba(56, 232, 176, 0.08);
+    transform: rotate(45deg);
+}
+
+.brand-mark span {
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+}
+
+.brand strong, .brand small { display: block; }
+.brand strong { font-size: 0.9rem; letter-spacing: 0.18em; }
+.brand small { margin-top: 0.18rem; color: var(--muted); font-size: 0.75rem; }
+
+.system-state {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: #bed0d9;
+    font-size: 0.82rem;
+}
+
+.status-pulse, .working-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 5px rgba(56, 232, 176, 0.1);
+}
+
+/* 两栏比例强调结果区；左栏保持粘性，长报告滚动时输入上下文不会丢失。 */
+.workspace {
+    width: min(1540px, 100%);
+    min-height: calc(100vh - 76px);
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(330px, 0.78fr) minmax(520px, 1.5fr);
+}
+
+.command-panel, .result-panel { padding: clamp(1.5rem, 3.6vw, 3.6rem); }
+
+.command-panel {
+    border-right: 1px solid var(--line);
+    background: rgba(8, 17, 29, 0.68);
+}
+
+.result-panel { min-width: 0; }
+
+.section-heading, .result-toolbar, .progress-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.eyebrow {
+    margin: 0 0 0.65rem;
+    color: var(--accent);
+    font: 600 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.18em;
+}
+
+h1, h2, h3, p { margin-top: 0; }
+h1 { margin-bottom: 0; font-size: clamp(1.65rem, 3vw, 2.35rem); letter-spacing: -0.035em; }
+h2 { margin-bottom: 0; font-size: 1.55rem; }
+h3 { font-size: 1.12rem; }
+
+.helper-text {
+    max-width: 37rem;
+    margin: 1rem 0 1.4rem;
+    color: var(--muted);
+    line-height: 1.75;
+}
+
+textarea {
+    width: 100%;
+    min-height: 210px;
+    resize: vertical;
+    padding: 1.2rem;
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    outline: none;
+    background: rgba(3, 10, 19, 0.72);
+    line-height: 1.7;
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+textarea::placeholder { color: #657d8d; }
+textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56, 232, 176, 0.1); }
+
+.input-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 0.55rem;
+    color: #6f8898;
+    font-size: 0.75rem;
+}
+
+.examples {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 1.25rem 0;
+}
+
+.examples > span { color: var(--muted); font-size: 0.78rem; }
+
+.examples button, .text-button {
+    padding: 0.5rem 0.68rem;
+    color: #b9ccd6;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.025);
+    font-size: 0.78rem;
+}
+
+.examples button:hover, .text-button:hover { color: var(--text); border-color: var(--line-strong); }
+
+.primary-button, .secondary-button {
+    border: 0;
+    border-radius: 10px;
+    font-weight: 700;
+    transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
+}
+
+.primary-button {
+    width: 100%;
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 1.2rem;
+    color: #05231a;
+    background: var(--accent);
+}
+
+.primary-button:hover:not(:disabled) { transform: translateY(-1px); background: #55f3c3; }
+.primary-button:disabled { cursor: wait; opacity: 0.65; }
+.button-arrow { font-size: 1.3rem; }
+
+.secondary-button {
+    padding: 0.65rem 0.85rem;
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+    background: transparent;
+}
+
+.secondary-button:hover { border-color: var(--accent); color: var(--accent); }
+
+.conversation-card, .safety-note {
+    margin-top: 1.25rem;
+    padding: 1rem;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+}
+
+.conversation-card { background: rgba(56, 232, 176, 0.04); }
+.conversation-card > span { color: var(--muted); font-size: 0.75rem; }
+.conversation-card code { display: block; margin: 0.35rem 0; color: var(--accent); overflow-wrap: anywhere; }
+.conversation-card p { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.55; }
+
+.safety-note { display: flex; gap: 0.75rem; color: var(--muted); background: rgba(255, 190, 85, 0.035); }
+.safety-note > span {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    color: var(--warning);
+    border: 1px solid rgba(255, 190, 85, 0.45);
+    border-radius: 50%;
+    font-weight: 700;
+}
+.safety-note p { margin: 0; font-size: 0.8rem; line-height: 1.6; }
+.safety-note strong { color: #e8d6b3; }
+
+.result-toolbar { align-items: center; padding-bottom: 1.4rem; border-bottom: 1px solid var(--line); }
+
+/* 空状态采用雷达脉冲，表达“等待信号”而不是普通占位图。 */
+.empty-state {
+    min-height: 520px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.empty-state p { max-width: 32rem; color: var(--muted); line-height: 1.7; }
+
+.radar { position: relative; width: 112px; height: 112px; margin-bottom: 1.8rem; }
+.radar span { position: absolute; inset: 0; border: 1px solid rgba(56, 232, 176, 0.23); border-radius: 50%; }
+.radar span:nth-child(2) { inset: 22px; }
+.radar span:nth-child(3) { inset: 45px; background: var(--accent); box-shadow: 0 0 34px rgba(56, 232, 176, 0.52); }
+.radar::after { content: ""; position: absolute; inset: 50% 50% 0; border-left: 1px solid rgba(56, 232, 176, 0.52); transform-origin: top; transform: rotate(40deg); }
+
+.capability-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.55rem; margin-top: 0.8rem; }
+.capability-row span { padding: 0.42rem 0.6rem; color: #9fb5c1; border: 1px solid var(--line); border-radius: 999px; font-size: 0.72rem; }
+
+.progress-view { padding-top: 2rem; }
+.progress-header { align-items: center; }
+.progress-header > div { display: flex; align-items: center; gap: 0.75rem; }
+.working-dot { animation: pulse 1.4s ease-in-out infinite; }
+.progress-header > span { color: var(--accent); font: 600 0.85rem ui-monospace, monospace; }
+.progress-track { height: 4px; margin: 1.2rem 0 1.8rem; overflow: hidden; border-radius: 4px; background: rgba(255, 255, 255, 0.07); }
+.progress-track span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--accent)); transition: width 260ms ease; }
+
+.stage-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.7rem; padding: 0; list-style: none; }
+.stage-list li { display: flex; align-items: center; gap: 0.65rem; padding: 0.8rem; color: #718999; border: 1px solid var(--line); border-radius: 9px; font-size: 0.82rem; }
+.stage-list li::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; border: 1px solid currentColor; border-radius: 50%; }
+.stage-list li.active { color: var(--text); border-color: rgba(92, 200, 255, 0.45); background: rgba(92, 200, 255, 0.05); }
+.stage-list li.complete { color: var(--accent); }
+.stage-list li.complete::before { border-color: var(--accent); background: var(--accent); }
+
+.error-banner { margin: 1.3rem 0; padding: 1rem; color: #ffd5da; border: 1px solid rgba(255, 107, 122, 0.35); border-radius: 10px; background: rgba(255, 107, 122, 0.08); line-height: 1.6; }
+
+/* file:// 仅用于看样式；提示放在输入框前，确保用户无需滚动就能知道正确启动方式。 */
+.runtime-warning {
+    margin: 0 0 1.25rem;
+    padding: 0.9rem 1rem;
+    color: #e7d5b0;
+    border: 1px solid rgba(255, 190, 85, 0.35);
+    border-radius: 10px;
+    background: rgba(255, 190, 85, 0.07);
+    font-size: 0.84rem;
+    line-height: 1.65;
+}
+
+.runtime-warning a { color: var(--warning); overflow-wrap: anywhere; }
+
+/* 报告卡片以阅读与决策为核心，不复刻原始 JSON 层级。 */
+.report-view { padding-top: 1.7rem; }
+.report-summary { display: grid; grid-template-columns: 1fr auto; gap: 1.2rem; padding: 1.35rem; border: 1px solid var(--line-strong); border-radius: 14px; background: linear-gradient(135deg, rgba(18, 36, 56, 0.95), rgba(9, 21, 34, 0.9)); box-shadow: var(--shadow); }
+.report-summary h3 { margin-bottom: 0.5rem; font-size: 1.35rem; }
+.report-summary p { margin-bottom: 0; color: var(--muted); line-height: 1.65; }
+.risk-badge { align-self: start; min-width: 84px; padding: 0.55rem 0.7rem; text-align: center; border-radius: 7px; font: 700 0.82rem ui-monospace, monospace; }
+.risk-high { color: var(--high); background: rgba(255, 125, 110, 0.1); border: 1px solid rgba(255, 125, 110, 0.36); }
+.risk-medium { color: var(--medium); background: rgba(255, 190, 85, 0.1); border: 1px solid rgba(255, 190, 85, 0.36); }
+.risk-low { color: var(--low); background: rgba(56, 232, 176, 0.1); border: 1px solid rgba(56, 232, 176, 0.36); }
+
+.report-meta { display: flex; flex-wrap: wrap; gap: 0.55rem 1rem; margin: 0.85rem 0 1.6rem; color: #78909f; font-size: 0.75rem; }
+.report-meta code { color: #a8bfca; overflow-wrap: anywhere; }
+
+.report-section { margin-top: 1.7rem; }
+.report-section h3 { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.8rem; }
+.report-section h3::before { content: ""; width: 3px; height: 18px; border-radius: 2px; background: var(--accent); }
+
+.metric-grid, .evidence-grid, .cause-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.data-card { min-width: 0; padding: 1rem; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.018); }
+.data-card header { display: flex; justify-content: space-between; gap: 0.7rem; color: var(--muted); font-size: 0.78rem; }
+.data-card strong { display: block; margin-top: 0.55rem; font-size: 1.05rem; line-height: 1.45; }
+.data-card p { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.55; }
+.confidence { color: var(--accent); }
+
+.action-list, .observation-list { padding: 0; margin: 0; list-style: none; }
+.action-list li { display: grid; grid-template-columns: 32px 1fr auto; align-items: start; gap: 0.8rem; padding: 0.9rem 0; border-bottom: 1px solid var(--line); }
+.action-list li:last-child { border-bottom: 0; }
+.action-order { width: 28px; height: 28px; display: grid; place-items: center; color: var(--accent); border: 1px solid rgba(56, 232, 176, 0.3); border-radius: 7px; font: 600 0.75rem ui-monospace, monospace; }
+.action-copy strong { margin-bottom: 0.25rem; display: block; font-size: 0.9rem; }
+.action-copy span, .action-owner { color: var(--muted); font-size: 0.76rem; }
+.urgency-immediate { color: var(--high) !important; }
+
+.observation-list { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+.observation-list li { padding: 0.48rem 0.65rem; color: #b6cbd5; border: 1px solid var(--line); border-radius: 7px; font-size: 0.8rem; }
+
+@keyframes pulse { 50% { opacity: 0.35; transform: scale(0.78); } }
+
+@media (max-width: 900px) {
+    .workspace { grid-template-columns: 1fr; }
+    .command-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+    textarea { min-height: 160px; }
+    .empty-state { min-height: 360px; }
+}
+
+@media (max-width: 560px) {
+    .topbar { height: 68px; padding: 0 1rem; }
+    .brand small, .system-state span:last-child { display: none; }
+    .workspace { min-height: calc(100vh - 68px); }
+    .command-panel, .result-panel { padding: 1.25rem 1rem; }
+    .input-meta { align-items: flex-end; flex-direction: column; gap: 0.25rem; }
+    .stage-list, .metric-grid, .evidence-grid, .cause-grid { grid-template-columns: 1fr; }
+    .report-summary { grid-template-columns: 1fr; }
+    .risk-badge { justify-self: start; }
+    .action-list li { grid-template-columns: 32px 1fr; }
+    .action-owner { grid-column: 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
