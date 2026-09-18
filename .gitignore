@@ -1,0 +1,9 @@
+target/
+data/
+logs/
+*.log
+*.db
+*.mv.db
+*.trace.db
+.DS_Store
+.idea/

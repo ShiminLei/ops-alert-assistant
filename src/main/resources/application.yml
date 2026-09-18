@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: ops-alert-assistant
+  profiles:
+    default: local
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  pattern:
+    level: "%5p [traceId:%X{traceId:-}]"
+  level:
+    com.enterprise.opsassistant: INFO
+
+ops-assistant:
+  ai:
+    primary-provider: ${AI_PRIMARY_PROVIDER:mock-primary}
+    backup-provider: ${AI_BACKUP_PROVIDER:mock-backup}
+    max-history-messages: 20
+    providers:
+      mock-primary:
+        enabled: true
+        model: mock-ops-primary
+        temperature: 0.2
+        max-tokens: 2000
+        timeout: 30s
+      mock-backup:
+        enabled: true
+        model: mock-ops-backup
+        temperature: 0.2
+        max-tokens: 2000
+        timeout: 30s
+
