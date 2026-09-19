@@ -177,6 +177,18 @@ export AI_BAILIAN_API_KEY='your-bailian-key'
 ./mvnw spring-boot:run
 ```
 
+也可以使用仓库提供的安全模板。密钥只填写在被 Git 忽略的 `.env.local` 中，不要修改
+`.env.example`，更不要把真实密钥粘贴到 README、聊天记录或提交历史：
+
+```bash
+cp .env.example .env.local
+# 使用编辑器在 .env.local 中填写两个 API Key
+set -a
+source .env.local
+set +a
+./mvnw spring-boot:run
+```
+
 可通过 `AI_PRIMARY_PROVIDER`、`AI_BACKUP_PROVIDER`、各 Provider 的 `BASE_URL`、`MODEL`、
 `TEMPERATURE`、`MAX_TOKENS` 和 `TIMEOUT` 环境变量覆盖默认配置。项目默认只携带 H2 驱动；如果
 将 `DATABASE_URL` 改成 MySQL 或 PostgreSQL，还需要在 `pom.xml` 中增加相应 JDBC 驱动。

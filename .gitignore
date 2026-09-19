@@ -7,3 +7,8 @@ logs/
 *.trace.db
 .DS_Store
 .idea/
+
+# 本地真实模型密钥只能放在未跟踪的环境文件中，严禁提交到 GitHub。
+.env
+.env.*
+!.env.example
